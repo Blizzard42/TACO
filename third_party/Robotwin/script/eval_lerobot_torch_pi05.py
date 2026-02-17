@@ -27,6 +27,10 @@ from policy.pi05 import deploy_policy
 
 import torch
 
+from steering.steerer import PivotSteerer, PrimitiveSteerer
+from steering.utils import visualize_and_save_trajectory, compute_temporal_error
+from steering.vlm_client import VLMClient
+
 current_file_path = os.path.abspath(__file__)
 parent_directory = os.path.dirname(current_file_path)
 
@@ -83,7 +87,27 @@ def main(usr_args):
     video_save_dir = None
     video_size = None
 
+    # Steering Args:
+    compute_mmd: bool = usr_args["compute_mmd"]
+    num_mmd_samples: int = usr_args["num_mmd_samples"]
+    mmd_gamma: float = usr_args["mmd_gamma"]
+    
+    use_pivot_steering: bool = usr_args["use_pivot_steering"]
+    use_primitive_steering: bool = usr_args["use_primitive_steering"]
+    guidance_scale: float = usr_args["guidance_scale"]
+    ensemble_weights: list[float] = usr_args["ensemble_weights"]
+
+    vlm_server_url: str = usr_args["vlm_server_url"]
+    vlm_model_name: str = usr_args["vlm_model_name"]
+    vlm_prompt_path: str = usr_args["vlm_prompt_path"]
+
+    # Useful For Steering:
+    act_steps = 50 # May change in the future to 25
+    horizon_steps = 50
+
+
     tag = usr_args["tag"]
+    policy_path = usr_args["policy_path"]
 
     with open(f"./task_config/{task_config}.yml", "r", encoding="utf-8") as f:
         args = yaml.load(f.read(), Loader=yaml.FullLoader)
@@ -172,7 +196,7 @@ def main(usr_args):
     test_num = 100
     topk = 1
 
-    ckpt_dir = ""
+    ckpt_dir = policy_path
 
     model = pi05_model_torch.Lerobot_torch_PI05(
         task_name, 
@@ -260,7 +284,7 @@ def eval_policy(task_name,
                 TASK_ENV.close_env()
                 now_seed += 1
                 args["render_freq"] = render_freq
-                print("error occurs !")
+                print(e)
                 continue
 
         if (not expert_check) or (TASK_ENV.plan_success and TASK_ENV.check_success()):

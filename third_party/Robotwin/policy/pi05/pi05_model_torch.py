@@ -98,7 +98,13 @@ class Lerobot_torch_PI05:
             "task": [self.instruction],
         }
 
-    def get_action(self):
+    def get_action(
+            self,
+            num_samples: int = 1,
+            guidance_actions: torch.FloatTensor = None,
+            guidance_scale: float = 1.0,
+            gripper_guidance: bool = True,
+        ):
         assert (self.observation_window is not None), "update observation_window first!"
         with torch.no_grad():
             inputs = {k: v.to(self.policy.config.device) if isinstance(v, torch.Tensor) else v for k, v in self.observation_window.items()}
@@ -116,7 +122,7 @@ class Lerobot_torch_PI05:
                     assert 0
             
             inputs = self.preprocessor(inputs)
-            actions = self.policy.predict_action_chunk(inputs)
+            actions = self.policy.predict_action_chunk(inputs, num_samples=num_samples, guidance_actions=guidance_actions, guidance_scale=guidance_scale, gripper_guidance=gripper_guidance)
             actions_un = self.postprocessor(actions)
             
         return actions_un[0].to(torch.float32).cpu().numpy()

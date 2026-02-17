@@ -38,7 +38,7 @@ def eval(TASK_ENV, model, observation):
     model.update_observation_window(input_rgb_arr, input_state)
 
     # ======== Get Action ========
-
+    breakpoint()
     actions = model.get_action()[:model.pi0_step]
 
     # torch.set_printoptions(sci_mode=False)

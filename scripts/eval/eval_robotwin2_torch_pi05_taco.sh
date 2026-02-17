@@ -2,19 +2,23 @@
 
 # your cfn_ckpt_path !
 # Here, we recommend using the absolute path.
-export cfn_ckpt_path="your/path/to/cfn_ckpt.pt" 
+# adjust_bottle_cfn.pt
+# beat_block_hammer_cfn.pt
+# handover_block_cfn.pt
+# move_can_pot_cfn.pt
+# place_object_stand_cfn.pt
+
+export cfn_ckpt_path="/nethome/gpatlin3//flash/huggingface/hub/models--rhodes-team-teleai--pi05_TACO_robotwin2_finetuned/snapshots/0f000e2748bd1fcb43027d8790f81fcccaa04670/cfns/place_object_stand_cfn.pt" 
 
 cd ./third_party/Robotwin
 
 policy_name=pi05
-policy_path=your/path/to/trained/pi0.5 # model report id, or trained lerobot model checkpoint, e.g. ./outputs/pi05_training/checkpoints/100000/pretrained_model
+policy_path="/nethome/gpatlin3/flash/huggingface/hub/models--rhodes-team-teleai--pi05_TACO_robotwin2_finetuned/snapshots/0f000e2748bd1fcb43027d8790f81fcccaa04670/" # model report id, or trained lerobot model checkpoint, e.g. ./outputs/pi05_training/checkpoints/100000/pretrained_model
 task_config=demo_clean
 seed=1
-task_name=adjust_bottle
-tag=test
+task_name=place_object_stand
+tag=place_object_stand_pi05_taco
 # output dir is "./third_party/Robotwin/eval_result/{tag}"
-
-cd ./third_party/Robotwin
 
 PYTHONWARNINGS=ignore::UserWarning \
 python script/eval_lerobot_torch_pi05_taco.py \

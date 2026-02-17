@@ -1539,7 +1539,6 @@ class Base_Task(gym.Env):
             # ========== TOPP ==========
             # TODO
             topp_left_flag, topp_right_flag = True, True
-
             try:
                 times, left_pos, left_vel, acc, duration = (self.robot.left_mplib_planner.TOPP(left_path,
                                                                                             1 / 250,

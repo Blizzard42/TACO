@@ -731,7 +731,19 @@ class PI05Pytorch(nn.Module):  # see openpi `PI0Pytorch`
         return F.mse_loss(u_t, v_t, reduction="none")
 
     @torch.no_grad()  # see openpi `sample_actions` (slightly adapted)
-    def sample_actions(self, images, img_masks, tokens, masks, noise=None, num_steps=None) -> Tensor:
+    def sample_actions(
+        self, 
+        images, 
+        img_masks, 
+        tokens, 
+        masks, 
+        noise=None, 
+        num_steps=None, 
+        num_samples: int = 1,
+        guidance_actions: torch.FloatTensor = None,
+        guidance_scale: float = 1.0,
+        gripper_guidance: bool = True,
+    ) -> Tensor:
         """Do a full inference forward and compute the action."""
         if num_steps is None:
             num_steps = self.config.num_inference_steps
@@ -739,14 +751,8 @@ class PI05Pytorch(nn.Module):  # see openpi `PI0Pytorch`
         bsize = tokens.shape[0]
         device = tokens.device
 
-        if noise is None:
-            # Sample noise with padded dimension as expected by action_in_proj
-            actions_shape = (
-                bsize,
-                self.config.chunk_size,
-                self.config.max_action_dim,
-            )  # Use config max_action_dim for internal processing
-            noise = self.sample_noise(actions_shape, device)
+        # Determine if we need to use guidance
+        use_guidance = guidance_actions is not None and guidance_scale > 0.0
 
         prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(images, img_masks, tokens, masks)
         prefix_att_2d_masks = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
@@ -766,20 +772,56 @@ class PI05Pytorch(nn.Module):  # see openpi `PI0Pytorch`
         dt = -1.0 / num_steps
         dt = torch.tensor(dt, dtype=torch.float32, device=device)
 
-        x_t = noise
-        time = torch.tensor(1.0, dtype=torch.float32, device=device)
-        while time >= -dt / 2:
-            expanded_time = time.expand(bsize)
-            v_t = self.denoise_step(
-                prefix_pad_masks,
-                past_key_values,
-                x_t,
-                expanded_time,
-            )
-            x_t = x_t + dt * v_t
-            time += dt
+        # Sample multiple action trajectories if num_samples > 1
+        all_actions = []
+        for sample_idx in range(num_samples):
+            if noise is None:
+                # Sample noise with padded dimension as expected by action_in_proj
+                actions_shape = (
+                    bsize,
+                    self.config.chunk_size,
+                    self.config.max_action_dim,
+                )  # Use config max_action_dim for internal processing
+                noise = self.sample_noise(actions_shape, device)
+            x_t = noise
+            time = torch.tensor(1.0, dtype=torch.float32, device=device)
+            while time >= -dt / 2:
+                expanded_time = time.expand(bsize)
+                v_t = self.denoise_step(
+                    prefix_pad_masks,
+                    past_key_values,
+                    x_t,
+                    expanded_time,
+                )
+                # Apply Reconstruction Guidance
+                if use_guidance:
+                    # Everything in original dtype (bfloat16) is fine for this
+                    clean_x_t_hat = x_t + (1.0 - expanded_time.reshape(expanded_time.shape[0], 1, 1)) * v_t   # Line 26 of Alg 1 of RTC paper: https://arxiv.org/pdf/2506.07339
+                    residual = (clean_x_t_hat - guidance_actions) # [bsz, H, A]
 
-        return x_t
+                    # Analytic gradient: dL/dv = (1 - t) * residual
+                    grad_vel = (1.0 - expanded_time.reshape(expanded_time.shape[0], 1, 1)) * residual  # same shape as action_vel
+                    
+                    # # Disable guidance on the last action dimension (e.g., gripper)
+                    if not gripper_guidance:
+                        grad_vel[..., -1] = 0.0 # Disable right gripper guidance
+                        grad_vel[..., 6] = 0.0 # Disable left gripper guidance
+                    
+                    # Apply guidance
+                    v_t = v_t - guidance_scale * grad_vel  
+                x_t = x_t + dt * v_t
+                time += dt
+            all_actions.append(x_t)
+        
+        # Stack all samples: [num_samples, batch_size, horizon_steps, action_dim]
+        all_actions = torch.stack(all_actions, dim=0)
+        
+        # If only 1 sample, return original shape [batch_size, horizon_steps, action_dim]
+        if num_samples == 1:
+            return all_actions[0]
+        else:
+            # Return [num_samples, batch_size, horizon_steps, action_dim]
+            return all_actions
 
     @torch.no_grad()  # see openpi `sample_actions` (slightly adapted)
     def sample_actions_and_get_feature(self, images, img_masks, tokens, masks, noise=None, num_steps=None) -> Tensor:
@@ -1263,7 +1305,14 @@ class PI05Policy(PreTrainedPolicy):
         return self._action_queue.popleft()
 
     @torch.no_grad()
-    def predict_action_chunk(self, batch: dict[str, Tensor]) -> Tensor:
+    def predict_action_chunk(
+        self, 
+        batch: dict[str, Tensor], 
+        num_samples: int = 1,
+        guidance_actions: torch.FloatTensor = None,
+        guidance_scale: float = 1.0,
+        gripper_guidance: bool = True,
+    ) -> Tensor:
         """Predict a chunk of actions given environment observations."""
         self.eval()
 
@@ -1273,7 +1322,7 @@ class PI05Policy(PreTrainedPolicy):
 
         # import ipdb;ipdb.set_trace()
         # Sample actions using the model (no separate state needed for PI05)
-        actions = self.model.sample_actions(images, img_masks, tokens, masks)
+        actions = self.model.sample_actions(images, img_masks, tokens, masks, num_samples=num_samples, guidance_actions=guidance_actions, guidance_scale=guidance_scale, gripper_guidance=gripper_guidance)
 
         # ipdb.set_trace()
         # Unpad actions to actual action dimension
