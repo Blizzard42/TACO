@@ -12,6 +12,7 @@ import numpy as np
 from pathlib import Path
 from collections import deque
 import traceback
+import matplotlib.pyplot as plt # Added for MMD plotting
 
 import yaml
 from datetime import datetime
@@ -22,14 +23,15 @@ import pdb
 from generate_episode_instructions import *
 
 from policy.pi05 import pi05_model_torch
-
-from policy.pi05 import deploy_policy
+# from policy.pi05 import deploy_policy # Removed to use custom steered evaluation loop
 
 import torch
 
 from steering.steerer import PivotSteerer, PrimitiveSteerer
 from steering.utils import visualize_and_save_trajectory, compute_temporal_error
 from steering.vlm_client import VLMClient
+
+import debugpy
 
 current_file_path = os.path.abspath(__file__)
 parent_directory = os.path.dirname(current_file_path)
@@ -43,7 +45,6 @@ def class_decorator(task_name):
     except:
         raise SystemExit("No Task")
     return env_instance
-
 
 
 def get_camera_config(camera_type):
@@ -74,6 +75,61 @@ def get_task_ckpt_dir(base_dir: str, task: str) -> str:
     return os.path.join(task_dir, "checkpoints/030000/pretrained_model")
 
 
+# Helper from secondary file to ensure local eval loop works
+def encode_obs(observation):
+    input_rgb_arr = [
+        observation["observation"]["head_camera"]["rgb"],
+        observation["observation"]["right_camera"]["rgb"],
+        observation["observation"]["left_camera"]["rgb"],
+    ]
+    input_state = observation["joint_action"]["vector"]
+
+    return input_rgb_arr, input_state
+
+
+def report_episode_statistics(log_dir, episode_id, mmd_scores, vlm_intervention_count, 
+                              vlm_intervention_steps, success, act_steps, num_mmd_samples, mmd_gamma, mmd_threshold):
+    """Report MMD and VLM statistics for a single episode."""
+    
+    # Save MMD scores to file
+    mmd_log_path = os.path.join(log_dir, f"mmd_scores_episode_{episode_id}.txt")
+    with open(mmd_log_path, 'w') as f:
+        f.write(f"Episode ID: {episode_id}\n")
+        f.write(f"Success: {success}\n")
+        f.write(f"Number of samples: {num_mmd_samples}\n")
+        f.write(f"Gamma: {mmd_gamma}\n")
+        f.write(f"Mean MMD: {np.mean(mmd_scores) if mmd_scores else 0:.6f}\n")
+        f.write(f"Max MMD: {np.max(mmd_scores) if mmd_scores else 0:.6f}\n\n")
+        
+        f.write(f"MMD Threshold: {mmd_threshold}\n")
+        f.write(f"Total VLM Interventions: {vlm_intervention_count}\n")
+        if vlm_intervention_steps:
+            f.write(f"VLM Intervention Steps: {vlm_intervention_steps}\n")
+        f.write("\nPer-step MMD scores:\n")
+        for i, score in enumerate(mmd_scores):
+            vlm_marker = " [VLM]" if (i + 1) in vlm_intervention_steps else ""
+            f.write(f"Step {i+1}: {score:.6f}{vlm_marker}\n")
+    
+    # Plot MMD scores
+    if not mmd_scores: return
+    timesteps = np.arange(1, len(mmd_scores) + 1) * act_steps
+    fig, ax = plt.subplots(1, 1, figsize=(10, 6))
+    ax.plot(timesteps, mmd_scores, 'b-', marker='o', label='MMD Score')
+    ax.axhline(y=mmd_threshold, color='orange', linestyle=':', label=f'Threshold: {mmd_threshold}')
+    
+    if vlm_intervention_steps:
+        # Convert step numbers to indices (1-based to 0-based)
+        intervention_indices = [s - 1 for s in vlm_intervention_steps if 0 < s <= len(mmd_scores)]
+        if intervention_indices:
+            intervention_times = [timesteps[i] for i in intervention_indices]
+            intervention_vals = [mmd_scores[i] for i in intervention_indices]
+            ax.scatter(intervention_times, intervention_vals, color='red', s=100, marker='*', zorder=5, label='Intervention')
+            
+    ax.set_title(f'Episode {episode_id} MMD (Success: {success})')
+    ax.legend()
+    plt.savefig(os.path.join(log_dir, f"mmd_plot_episode_{episode_id}.png"))
+    plt.close()
+
 
 def main(usr_args):
     current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -87,25 +143,6 @@ def main(usr_args):
     video_save_dir = None
     video_size = None
 
-    # Steering Args:
-    compute_mmd: bool = usr_args["compute_mmd"]
-    num_mmd_samples: int = usr_args["num_mmd_samples"]
-    mmd_gamma: float = usr_args["mmd_gamma"]
-    
-    use_pivot_steering: bool = usr_args["use_pivot_steering"]
-    use_primitive_steering: bool = usr_args["use_primitive_steering"]
-    guidance_scale: float = usr_args["guidance_scale"]
-    ensemble_weights: list[float] = usr_args["ensemble_weights"]
-
-    vlm_server_url: str = usr_args["vlm_server_url"]
-    vlm_model_name: str = usr_args["vlm_model_name"]
-    vlm_prompt_path: str = usr_args["vlm_prompt_path"]
-
-    # Useful For Steering:
-    act_steps = 50 # May change in the future to 25
-    horizon_steps = 50
-
-
     tag = usr_args["tag"]
     policy_path = usr_args["policy_path"]
 
@@ -115,6 +152,12 @@ def main(usr_args):
     args['task_name'] = task_name
     args["task_config"] = task_config
     args["ckpt_setting"] = ckpt_setting
+
+    if usr_args.get("debug", False):
+        print("WAITING FOR DEBUGGER TO CONNECT")
+        debugpy.listen(("0.0.0.0", 8567))
+        debugpy.wait_for_client()
+        print("DEBUGGER CONNECTED")
 
     embodiment_type = args.get("embodiment")
     embodiment_config_path = os.path.join(CONFIGS_PATH, "_embodiment_config.yml")
@@ -188,6 +231,9 @@ def main(usr_args):
     args["policy_name"] = policy_name
     usr_args["left_arm_dim"] = len(args["left_embodiment_config"]["arm_joints_name"][0])
     usr_args["right_arm_dim"] = len(args["right_embodiment_config"]["arm_joints_name"][1])
+    
+    # Store save_dir in args for use in eval_policy
+    usr_args["log_dir"] = str(save_dir)
 
     seed = usr_args["seed"]
 
@@ -212,7 +258,8 @@ def main(usr_args):
                                    st_seed,
                                    test_num=test_num,
                                    video_size=video_size,
-                                   instruction_type=instruction_type)
+                                   instruction_type=instruction_type,
+                                   usr_args=usr_args) # Pass usr_args for steering config
     suc_nums.append(suc_num)
 
     topk_success_rate = sorted(suc_nums, reverse=True)[:topk]
@@ -235,9 +282,62 @@ def eval_policy(task_name,
                 st_seed,
                 test_num=100,
                 video_size=None,
-                instruction_type=None):
+                instruction_type=None,
+                usr_args=None):
+    
     print(f"\033[34mTask Name: {args['task_name']}\033[0m")
     print(f"\033[34mPolicy Name: {args['policy_name']}\033[0m")
+
+    # ================= Steering Configuration =================
+    compute_mmd = usr_args.get("compute_mmd", False)
+    num_mmd_samples = usr_args.get("num_mmd_samples", 10)
+    mmd_gamma = usr_args.get("mmd_gamma", "median")
+    
+    use_pivot_steering = usr_args.get("use_pivot_steering", False)
+    use_primitive_steering = usr_args.get("use_primitive_steering", False)
+    guidance_scale = usr_args.get("guidance_scale", 3.0)
+    ensemble_weights = usr_args.get("ensemble_weights", [0.5, 0.5])
+    mmd_threshold = usr_args.get("mmd_threshold", 0.8)
+    
+    vlm_server_url = usr_args.get("vlm_server_url", "")
+    vlm_model_name = usr_args.get("vlm_model_name", "Qwen/Qwen2.5-VL-72B-Instruct")
+    # TODO: Add specific prompt paths or use defaults
+    vlm_prompt_path = usr_args.get("vlm_prompt_path", None) 
+    
+    log_dir = usr_args.get("log_dir", "./eval_result")
+    
+    # Steering constants
+    act_steps = 50 
+    horizon_steps = 50 # Assuming this aligns with model cfg
+
+    vlm_client = None
+    if use_pivot_steering or use_primitive_steering:
+        vlm_client = VLMClient(vlm_server_url, vlm_model_name)
+
+    pivot_steerer = None
+    if use_pivot_steering:
+        pivot_steerer = PivotSteerer(
+            vlm_client=vlm_client,
+            save_dir=os.path.join(log_dir, "vlm_steering"),
+            camera_name="head_camera",
+            prompt_template_path=vlm_prompt_path, # TODO: Check if specific template needed
+            traj_std_perturb=0.0
+        )
+        print(f"Initialized PivotSteerer with VLM server: {vlm_server_url}")
+
+    primitive_steerer = None
+    if use_primitive_steering:
+        primitive_steerer = PrimitiveSteerer(
+            vlm_client=vlm_client,
+            save_dir=os.path.join(log_dir, "primitive_steering"),
+            camera_name="head_camera",
+            prompt_template_path=None, # TODO: Add primitive prompt path
+            horizon_steps=horizon_steps,
+            nudge_distance=0.1
+        )
+        print(f"Initialized PrimitiveSteerer with VLM server: {vlm_server_url}")
+
+    # ==========================================================
 
     expert_check = True
     TASK_ENV.suc = 0
@@ -247,17 +347,19 @@ def eval_policy(task_name,
     succ_seed = 0
     suc_test_seed_list = []
 
-    policy_name = args["policy_name"]
-    # eval_func = eval_function_decorator(policy_name, "eval")
-    # reset_func = eval_function_decorator(policy_name, "reset_model")
-    eval_func = deploy_policy.eval
-    reset_func = deploy_policy.reset_model
+    # Note: We are replacing deploy_policy.eval and reset_model with local logic
+    # eval_func = deploy_policy.eval 
+    # reset_func = deploy_policy.reset_model
 
     now_seed = st_seed
     task_total_reward = 0
     clear_cache_freq = args["clear_cache_freq"]
 
     args["eval_mode"] = True
+
+    # Global Tracking
+    all_episode_mmd_scores = []
+    all_episode_vlm_interventions = []
 
     while succ_seed < test_num:
         render_freq = args["render_freq"]
@@ -269,18 +371,11 @@ def eval_policy(task_name,
                 episode_info = TASK_ENV.play_once()
                 TASK_ENV.close_env()
             except UnStableError as e:
-                # print(" -------------")
-                # print("Error: ", e)
-                # print(" -------------")
                 TASK_ENV.close_env()
                 now_seed += 1
                 args["render_freq"] = render_freq
                 continue
             except Exception as e:
-                # stack_trace = traceback.format_exc()
-                # print(" -------------")
-                # print("Error: ", e)
-                # print(" -------------")
                 TASK_ENV.close_env()
                 now_seed += 1
                 args["render_freq"] = render_freq
@@ -333,14 +428,203 @@ def eval_policy(task_name,
             TASK_ENV._set_eval_video_ffmpeg(ffmpeg)
 
         succ = False
-        reset_func(model) # model.reset_obsrvationwindows()
+        
+        # ---- Evaluation Loop Start ----
+        # Replaces reset_func(model)
+        model.reset_obsrvationwindows()
+        if model.observation_window is None:
+            model.set_language(instruction)
+
+        # Episode-specific MMD tracking
+        prev_action_samples = None
+        mmd_scores = []
+        vlm_intervention_count = 0
+        vlm_intervention_steps = []
+        cnt_step = 0 # Step counter for MMD logging (corresponds to chunks)
+
         while TASK_ENV.take_action_cnt < TASK_ENV.step_lim:
             observation = TASK_ENV.get_obs()
-            eval_func(TASK_ENV, model, observation)
+            
+            # Replaces: input_rgb_arr, input_state = encode_obs(observation)
+            #           model.update_observation_window(...)
+            input_rgb_arr, input_state = encode_obs(observation)
+            model.update_observation_window(input_rgb_arr, input_state)
+
+            # ======== Steered Action Generation Logic ========
+            actions = None
+            action_samples = model.get_action(num_samples=num_mmd_samples)
+            if compute_mmd:
+                # 1. Sample actions for MMD
+                # model.get_action supports num_samples (returns [num_samples, horizon, dim])
+                with torch.inference_mode():
+                    action_samples = model.get_action(num_samples=num_mmd_samples)
+                    
+                    # Ensure tensor for calculation (get_action likely returns tensor or numpy)
+                    if isinstance(action_samples, np.ndarray):
+                        action_samples = torch.from_numpy(action_samples)
+                    
+                    if num_mmd_samples == 1 and action_samples.ndim == 2:
+                        action_samples = action_samples.unsqueeze(0)
+
+                # 2. Compute MMD
+                if prev_action_samples is not None:
+                    # Reshape for compute_temporal_error: [num_envs=1, num_samples, horizon, dim]
+                    curr_actions_t = action_samples.unsqueeze(0).transpose(1, 0)
+                    prev_actions_t = prev_action_samples.unsqueeze(0).transpose(1, 0)
+                    
+                    # Handle Gamma string/float conversion
+                    gamma_val = mmd_gamma
+                    try:
+                        gamma_val = float(mmd_gamma)
+                    except: pass
+
+                    mmd_score = compute_temporal_error(
+                        curr_actions_t,
+                        prev_actions_t,
+                        exec_horizon=act_steps, # Use act_steps as exec horizon
+                        gamma=gamma_val
+                    )[0]
+                    
+                    mmd_scores.append(mmd_score.item())
+                    # print(f"Step {cnt_step}: MMD = {mmd_score.item():.4f}")
+
+                    # 3. VLM Steering Intervention
+                    guidance_traj_list = []
+                    
+                    if mmd_score > mmd_threshold:
+                        print(f"\033[93mMMD Trigger ({mmd_score:.4f} > {mmd_threshold}). Steering...\033[0m")
+                        
+                        # Prepare data for steerer
+                        # Note: Steerers expect CPU numpy usually
+                        action_samples_np = action_samples.cpu().numpy()
+                        
+                        if pivot_steerer:
+                            selected_idx, _ = pivot_steerer.select_trajectory(
+                                env=None, # Not used in current implementation
+                                obs=observation,
+                                action_samples=action_samples, # Pass tensor or numpy depending on steerer impl
+                                env_adapter=None, # Explicitly None per instruction
+                                step_num=cnt_step,
+                                episode_id=TASK_ENV.test_num,
+                                mmd_score=mmd_score,
+                                task_description=instruction,
+                                num_trajectories=5 # Default pivot num
+                            )
+                            # Get guidance trajectory [horizon, dim]
+                            guidance_traj = action_samples[selected_idx]
+                            guidance_traj_list.append(guidance_traj)
+                            
+                        if primitive_steerer:
+                            prim_traj, _ = primitive_steerer.select_trajectory(
+                                env=None,
+                                obs=observation,
+                                action_samples=action_samples,
+                                step_num=cnt_step,
+                                episode_id=TASK_ENV.test_num,
+                                mmd_score=mmd_score,
+                                task_description=instruction
+                            )
+                            # Convert primitive numpy to tensor
+                            prim_traj_t = torch.from_numpy(prim_traj).to(action_samples.device)
+                            guidance_traj_list.append(prim_traj_t)
+
+                        # 4. Apply Guidance
+                        if len(guidance_traj_list) > 0:
+                            vlm_intervention_count += 1
+                            vlm_intervention_steps.append(cnt_step + 1)
+                            
+                            # Ensemble weights
+                            if len(guidance_traj_list) > 1:
+                                stacked_trajs = torch.stack(guidance_traj_list)
+                                weights = torch.tensor(ensemble_weights[:len(guidance_traj_list)], 
+                                                     device=stacked_trajs.device)
+                                weights = weights / weights.sum()
+                                weights = weights.view(-1, 1, 1)
+                                final_guidance = (stacked_trajs * weights).sum(dim=0)
+                            else:
+                                final_guidance = guidance_traj_list[0]
+
+                            # Guided Inference
+                            with torch.inference_mode():
+                                actions = model.get_action(
+                                    num_samples=1,
+                                    guidance_actions=final_guidance,
+                                    guidance_scale=guidance_scale,
+                                    gripper_guidance=True
+                                )
+                                # Ensure actions is [horizon, dim]
+                                if actions.ndim == 3: actions = actions.squeeze(0)
+
+                # Update Previous Samples
+                prev_action_samples = action_samples.clone()
+                
+                # If no steering happened, pick first sample or mean
+                if actions is None:
+                    actions = action_samples[0]
+                
+                # Visualization (Optional if MMD computed)
+                if compute_mmd:
+                    # Create directory
+                    episode_rollout_dir = os.path.join(log_dir, "rollout_img", f"episode_{TASK_ENV.test_num}")
+                    os.makedirs(episode_rollout_dir, exist_ok=True)
+                    traj_save_path = os.path.join(episode_rollout_dir, f"step_{cnt_step}.png")
+                    
+                    # Needs adaptation: visualize expects specific env/obs format. 
+                    # Passing TASK_ENV directly.
+                    try:
+                        # Assuming action_samples is [N, T, D]
+                        visualize_and_save_trajectory(
+                            TASK_ENV, 
+                            observation, 
+                            action_samples.cpu().numpy(), 
+                            cnt_step,
+                            save_path=traj_save_path,
+                            mmd_mode=True,
+                            mmd_score=mmd_scores[-1] if mmd_scores else None,
+                            camera_name="head_camera"
+                        )
+                    except Exception as e:
+                        # print(f"Viz failed: {e}") 
+                        pass # visualization shouldn't crash eval
+
+            else:
+                # Standard Inference (No Steering/MMD)
+                actions = model.get_action() # Returns [horizon, dim]
+
+            # Execute Action Chunk
+            # model.pi0_step usually defines execution horizon (e.g. 10 or 50)
+            exec_steps = model.pi0_step
+            # Handle if actions is tensor
+            if isinstance(actions, torch.Tensor):
+                actions = actions.cpu().numpy()
+
+            for i, action in enumerate(actions[:exec_steps]):
+                TASK_ENV.take_action(action)
+                
+                # We need to update observation window for every step in the chunk 
+                # (except the very last one where we loop back to top)
+                if i < exec_steps - 1:
+                    observation = TASK_ENV.get_obs()
+                    input_rgb_arr, input_state = encode_obs(observation)
+                    model.update_observation_window(input_rgb_arr, input_state)
+            
+            cnt_step += 1 # Increment chunk step counter
+
+            # Check success (replacing TASK_ENV.eval_success check inside loop)
             if TASK_ENV.eval_success:
                 succ = True
                 break
-        # task_total_reward += TASK_ENV.episode_score
+        
+        # ---- Evaluation Loop End ----
+
+        # Report stats
+        if compute_mmd and len(mmd_scores) > 0:
+            report_episode_statistics(save_dir, TASK_ENV.test_num, mmd_scores, 
+                                      vlm_intervention_count, vlm_intervention_steps, succ,
+                                      act_steps, num_mmd_samples, mmd_gamma, mmd_threshold)
+            all_episode_mmd_scores.append(mmd_scores)
+            all_episode_vlm_interventions.append(vlm_intervention_count)
+
         if TASK_ENV.eval_video_path is not None:
             TASK_ENV._del_eval_video_ffmpeg()
 
@@ -364,6 +648,13 @@ def eval_policy(task_name,
         )
         # TASK_ENV._take_picture()
         now_seed += 1
+    
+    # Final Statistics
+    if compute_mmd and len(all_episode_mmd_scores) > 0:
+        # Simple aggregated report
+        with open(os.path.join(save_dir, "final_steering_stats.txt"), 'w') as f:
+            f.write(f"Total Episodes: {len(all_episode_mmd_scores)}\n")
+            f.write(f"Total Interventions: {sum(all_episode_vlm_interventions)}\n")
 
     return now_seed, TASK_ENV.suc
 

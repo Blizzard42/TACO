@@ -106,7 +106,7 @@ class PivotSteerer:
         self,
         vlm_client: VLMClient,
         save_dir: Optional[str] = None,
-        camera_name: str = "overhead_camera",
+        camera_name: str = "head_camera",
         prompt_template_path: Optional[str] = None,
         traj_std_perturb: float = 0.0,
         line_thickness: int = 2
@@ -161,23 +161,18 @@ class PivotSteerer:
             annotated_image: BGR image with trajectories drawn
             selected_indices: Indices of the selected representative trajectories
         """
-        # Get the arm controller
-        controller = env.env.env.env.agent.controller.controllers['arm']
         
         # Get current EE pose
-        current_ee_pose_at_base = controller.ee_pose_at_base
-        robot_base_pose = env.env.env.env.agent.robot.pose
-        current_ee_pose_world = robot_base_pose * current_ee_pose_at_base
-        current_tcp_world = current_ee_pose_world.p
+        current_ee_pose = np.stack([env.robot.get_left_ee_pose()[:3], env.robot.get_right_ee_pose()[:3]], axis=0)
         
         # Compute future end-effector positions for all trajectories
         all_trajectories = []
         for env_actions in env_actions_list:
             ee_positions_world = compute_future_ee_poses_using_controller(
-                env, env_actions[:, :6], obs
+                env, env_actions, obs
             )
             # Add current position as the starting point
-            all_positions = np.vstack([current_tcp_world, ee_positions_world])
+            all_positions = np.vstack([current_ee_pose[np.newaxis], ee_positions_world])
             
             if self.traj_std_perturb > 0.0:
                 # Apply perturbation only to trajectory points, not the origin (first point)
@@ -187,42 +182,28 @@ class PivotSteerer:
             all_trajectories.append(all_positions)
         
         # Convert list to numpy array for selection algorithm
-        all_trajectories_array = np.array(all_trajectories)  # Shape: (num_samples, horizon, 3)
+        all_trajectories = np.array(all_trajectories).transpose(2, 0, 1, 3)  # Shape: (2, num_samples, horizon, 3)
         
         # Select representative trajectories based on cosine similarity
-        selected_indices = select_representative_trajectories(
-            all_trajectories_array, 
+        selected_indices_left = select_representative_trajectories(
+            all_trajectories[0], 
+            num_trajectories=num_trajectories
+        )
+
+        selected_indices_right = select_representative_trajectories(
+            all_trajectories[1], 
             num_trajectories=num_trajectories
         )
         
         # Get camera parameters
-        cam_params = obs['camera_param'][self.camera_name]
-        
-        if 'extrinsic_cv' in cam_params:
-            extrinsic = cam_params['extrinsic_cv']
-        elif 'extrinsic' in cam_params:
-            extrinsic = cam_params['extrinsic']
-        else:
-            raise ValueError(f"Could not find extrinsic for {self.camera_name}")
-            
-        if 'intrinsic_cv' in cam_params:
-            intrinsic = cam_params['intrinsic_cv']
-        elif 'intrinsic' in cam_params:
-            intrinsic = cam_params['intrinsic']
-        else:
-            raise ValueError(f"Could not find intrinsic for {self.camera_name}")
+        cam_params = obs['observation'][self.camera_name]
+
+        extrinsic = cam_params['extrinsic_cv']
+        intrinsic = cam_params['intrinsic_cv']
         
         # Get image
-        img = obs['image'][self.camera_name]['rgb'].copy()
+        img = obs['observation'][self.camera_name]['rgb'].copy()
         img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-        
-        # Ensure image is in correct format
-        if img.dtype == np.float32 or img.dtype == np.float64:
-            img = (np.clip(img, 0, 1) * 255).astype(np.uint8)
-        if len(img.shape) == 2:
-            img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-        elif img.shape[2] == 4:
-            img = cv2.cvtColor(img, cv2.COLOR_RGBA2BGR)
         
         # Define distinct colors for trajectories matching the prompt template
         # Order: Red, Orange, Blue, Cyan, Magenta (BGR format for OpenCV)
@@ -235,8 +216,8 @@ class PivotSteerer:
         ]
         
         # Draw only the selected representative trajectories
-        for i, traj_idx in enumerate(selected_indices):
-            all_positions = all_trajectories[traj_idx]
+        for i, traj_idx in enumerate(selected_indices_left):
+            all_positions = all_trajectories[0, traj_idx, :16]
             
             # Project 3D positions to 2D
             points_2d, depths = project_3d_to_2d(all_positions, extrinsic, intrinsic)
@@ -317,13 +298,13 @@ class PivotSteerer:
         # Add legend with color names
         color_names = ["Red", "Orange", "Blue", "Cyan", "Magenta"]
         legend_y = 30
-        for i, color in enumerate(predefined_colors[:len(selected_indices)]):
+        for i, color in enumerate(predefined_colors[:len(selected_indices_left)]):
             cv2.circle(img, (30, legend_y), 6, color, -1)
             cv2.putText(img, color_names[i], (45, legend_y + 5),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
             legend_y += 25
         
-        return img, selected_indices
+        return img, selected_indices_left
 
     def select_trajectory(
         self,

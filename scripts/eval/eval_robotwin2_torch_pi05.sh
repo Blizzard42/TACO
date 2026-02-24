@@ -23,8 +23,8 @@ tag=debug
 compute_mmd=False
 num_mmd_samples=100
 mmd_gamma=10.0
-use_pivot_steering=True
-use_primitive_steering=True
+use_pivot_steering=False
+use_primitive_steering=False
 guidance_scale=1.0
 ensemble_weights="[1.0,0.0]" # [pivot_weight, primitive_weight]
 vlm_server_url="http://localhost:8000"
@@ -51,5 +51,6 @@ python script/eval_lerobot_torch_pi05.py \
     --ensemble_weights ${ensemble_weights} \
     --vlm_server_url ${vlm_server_url} \
     --vlm_model_name ${vlm_model_name} \
-    --vlm_prompt_path ${vlm_prompt_path}
+    --vlm_prompt_path ${vlm_prompt_path} \
+    $@
 

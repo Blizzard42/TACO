@@ -1,5 +1,6 @@
 import numpy as np
 from typing import Optional, Union, Literal, cast, Dict, Tuple, List
+import transforms3d as t3d
 
 import torch
 from sklearn import metrics
@@ -169,64 +170,60 @@ def project_3d_to_2d(points_3d, extrinsic, intrinsic):
 
 
 def compute_future_ee_poses_using_controller(env, env_actions, obs):
-    """
-    Compute future end-effector poses using the actual controller's logic.
-    This ensures we use the exact same computation as the real controller.
+    left_planner = env.robot.left_mplib_planner.planner
+    right_planner = env.robot.right_mplib_planner.planner
     
-    Args:
-        env: The environment
-        env_actions: (N, 7) array where first 6 dims are [delta_pos, delta_rot]
-        obs: Current observation (to get current state)
-    
-    Returns:
-        ee_positions_world: (N, 3) array of end-effector positions in world frame
-    """
-    # Get the arm controller
-    controller = env.env.env.env.agent.controller.controllers['arm']
-    
+    robot_base_pose_left = left_planner.robot.get_base_pose()
+    robot_base_pose_right = right_planner.robot.get_base_pose()
     # Get current state
-    # Try different ways to get the current EE pose
-    if hasattr(controller, 'ee_pose_at_base'):
-        prev_ee_pose_at_base = controller.ee_pose_at_base
-    elif 'tcp_pose' in obs.get('extra', {}):
-        # tcp_pose is usually [x, y, z, qw, qx, qy, qz]
-        tcp_pose = obs['extra']['tcp_pose']
-        prev_ee_pose_at_base = sapien.Pose(tcp_pose[:3], tcp_pose[3:])
-    else:
-        # Fallback: use agent eef_pos
-        eef_pos = obs['agent']['eef_pos']
-        prev_ee_pose_at_base = sapien.Pose(eef_pos[:3], eef_pos[3:7])
     
     ee_positions = []
-    current_pose = prev_ee_pose_at_base
+    current_qpos_left = env.robot.left_entity.get_qpos()
+    current_qpos_right = env.robot.right_entity.get_qpos()
+
+    arm_indices_left = left_planner.move_group_joint_indices
+    arm_indices_right = right_planner.move_group_joint_indices
+
+    eef_link_index_left = left_planner.pinocchio_model.get_link_names().index('fl_link6') # Should be 42 from experience
+    eef_link_index_right = right_planner.pinocchio_model.get_link_names().index('fr_link6') # Should be 43 from experience
+
+    def get_tcp_pos(world_pose, arm_tag):
+        mat = t3d.quaternions.quat2mat(world_pose.q)
+        g_trans = env.robot.left_global_trans_matrix if arm_tag == "left" else env.robot.right_global_trans_matrix
+        delta = env.robot.left_delta_matrix if arm_tag == "left" else env.robot.right_delta_matrix
+        bias = env.robot.left_gripper_bias if arm_tag == "left" else env.robot.right_gripper_bias
+        
+        # Combine rotations
+        combined_rot = mat @ g_trans @ delta
+        # Offset by (bias - 0.12) along the local X axis of the combined frame
+        offset = combined_rot @ np.array([bias - 0.12, 0, 0])
+        return world_pose.p + offset
     
     # Iterate through actions and compute cumulative poses
     for action in env_actions:
+        left_arm_actions = action[:6]
+        right_arm_actions = action[7:13]
+        target_qpos_left = current_qpos_left.copy()
+        target_qpos_right = current_qpos_right.copy()
+        target_qpos_left[arm_indices_left] = left_arm_actions
+        target_qpos_right[arm_indices_right] = right_arm_actions
+
         # Use the controller's actual compute_target_pose method
-        target_pose = controller.compute_target_pose(current_pose, action[:6])
+        left_planner.pinocchio_model.compute_forward_kinematics(target_qpos_left)
+        left_target_pose = left_planner.pinocchio_model.get_link_pose(eef_link_index_left) 
+
+        right_planner.pinocchio_model.compute_forward_kinematics(target_qpos_right)
+        right_target_pose = right_planner.pinocchio_model.get_link_pose(eef_link_index_right)
         
         # Extract position from the pose
-        ee_positions.append(target_pose.p.copy())
-        
-        # Update for next iteration
-        current_pose = target_pose
+        ee_positions.append(
+            (get_tcp_pos(robot_base_pose_left * left_target_pose, "left"), 
+             get_tcp_pos(robot_base_pose_right * right_target_pose, "right")))
     
-    ee_positions = np.array(ee_positions)
-    
-    # Transform from robot base frame to world frame
-    robot_base_pose = env.env.env.env.agent.robot.pose  # Make sure this matches!
-    ee_positions_world = []
-    for pos in ee_positions:
-        # Create pose in base frame
-        pose_at_base = sapien.Pose(pos)
-        # Transform to world frame
-        pose_world = robot_base_pose * pose_at_base
-        ee_positions_world.append(pose_world.p)
-    
-    return np.array(ee_positions_world)
+    return np.array(ee_positions)
 
 
-def visualize_trajectory_on_cameras(env, obs, env_actions_list, mmd_mode=False, camera_name="overhead_camera"):
+def visualize_trajectory_on_cameras(env, obs, env_actions_list, mmd_mode=False, camera_name="head_camera"):
     """
     Visualize the predicted trajectory on camera images.
     Uses the actual controller's compute_target_pose to ensure accuracy.
@@ -242,13 +239,15 @@ def visualize_trajectory_on_cameras(env, obs, env_actions_list, mmd_mode=False, 
         annotated_images: Dict with 'base_camera' and 'overhead_camera' images
     """
     # Get the arm controller
-    controller = env.env.env.env.agent.controller.controllers['arm']
+    # controller = env.env.env.env.agent.controller.controllers['arm']
     
     # Get current EE pose from controller (in base frame) and transform to world frame
-    current_ee_pose_at_base = controller.ee_pose_at_base
-    robot_base_pose = env.env.env.env.agent.robot.pose
-    current_ee_pose_world = robot_base_pose * current_ee_pose_at_base
-    current_tcp_world = current_ee_pose_world.p
+    # current_ee_pose_at_base = controller.ee_pose_at_base
+    current_ee_pose_at_base_left = obs['endpose']['left_endpose']
+    current_ee_pose_at_base_right = obs['endpose']['right_endpose']
+    # robot_base_pose = env.env.env.env.agent.robot.pose
+    current_ee_pose_world_left = current_ee_pose_at_base_left # robot_base_pose * current_ee_pose_at_base
+    # current_tcp_world = current_ee_pose_world_left.p
     
     # Convert to list if not in MMD mode
     if not mmd_mode:
