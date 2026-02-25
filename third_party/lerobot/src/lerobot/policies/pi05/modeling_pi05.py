@@ -1327,7 +1327,7 @@ class PI05Policy(PreTrainedPolicy):
         # ipdb.set_trace()
         # Unpad actions to actual action dimension
         original_action_dim = self.config.output_features[ACTION].shape[0]
-        actions = actions[:, :, :original_action_dim]
+        actions = actions[..., :original_action_dim]
 
         return actions
 

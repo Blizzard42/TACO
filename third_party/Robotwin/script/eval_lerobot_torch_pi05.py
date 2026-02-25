@@ -452,7 +452,6 @@ def eval_policy(task_name,
 
             # ======== Steered Action Generation Logic ========
             actions = None
-            action_samples = model.get_action(num_samples=num_mmd_samples)
             if compute_mmd:
                 # 1. Sample actions for MMD
                 # model.get_action supports num_samples (returns [num_samples, horizon, dim])
@@ -600,6 +599,7 @@ def eval_policy(task_name,
 
             for i, action in enumerate(actions[:exec_steps]):
                 TASK_ENV.take_action(action)
+                breakpoint()
                 
                 # We need to update observation window for every step in the chunk 
                 # (except the very last one where we loop back to top)
