@@ -20,16 +20,16 @@ task_name=handover_block
 tag=debug
 
 # Steering Parameters:
-compute_mmd=False
+compute_mmd=True
 num_mmd_samples=100
 mmd_gamma=10.0
-use_pivot_steering=False
+use_pivot_steering=True
 use_primitive_steering=False
 guidance_scale=1.0
 ensemble_weights="[1.0,0.0]" # [pivot_weight, primitive_weight]
 vlm_server_url="http://localhost:8000"
 vlm_model_name="Qwen/Qwen2.5-VL-72B-Instruct"
-vlm_prompt_path="placeholder"
+vlm_prompt_path="/nethome/gpatlin3/flash/TACO/third_party/Robotwin/steering/prompts/vlm_prompt_template.txt"
 # output dir is "./third_party/Robotwin/eval_result/{tag}"
 
 PYTHONWARNINGS=ignore::UserWarning \

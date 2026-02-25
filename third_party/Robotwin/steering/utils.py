@@ -230,24 +230,17 @@ def visualize_trajectory_on_cameras(env, obs, env_actions_list, mmd_mode=False, 
     
     Args:
         env: The environment
-        obs: Current observation dict with keys ['agent', 'camera_param', 'image', 'extra']
-        env_actions_list: List of (N, 7) action arrays if mmd_mode=True, 
-                         or single (N, 7) array if mmd_mode=False
+        obs: Current observation dict with keys ['observation']
+        env_actions_list: List of (N, 14) action arrays if mmd_mode=True, 
+                         or single (N, 14) array if mmd_mode=False
         mmd_mode: If True, visualize all trajectories with different colors
     
     Returns:
-        annotated_images: Dict with 'base_camera' and 'overhead_camera' images
+        annotated_images: Dict with camera name keys and annotated images
     """
-    # Get the arm controller
-    # controller = env.env.env.env.agent.controller.controllers['arm']
-    
-    # Get current EE pose from controller (in base frame) and transform to world frame
-    # current_ee_pose_at_base = controller.ee_pose_at_base
-    current_ee_pose_at_base_left = obs['endpose']['left_endpose']
-    current_ee_pose_at_base_right = obs['endpose']['right_endpose']
-    # robot_base_pose = env.env.env.env.agent.robot.pose
-    current_ee_pose_world_left = current_ee_pose_at_base_left # robot_base_pose * current_ee_pose_at_base
-    # current_tcp_world = current_ee_pose_world_left.p
+    # Get current EE pose from robot and stack for dual-arm handling
+    current_ee_pose = np.stack([env.robot.get_left_ee_pose()[:3], env.robot.get_right_ee_pose()[:3]], axis=0)
+    current_tcp_world = current_ee_pose # Shape: (2, 3)
     
     # Convert to list if not in MMD mode
     if not mmd_mode:
@@ -256,15 +249,19 @@ def visualize_trajectory_on_cameras(env, obs, env_actions_list, mmd_mode=False, 
     # Compute future end-effector positions for all trajectories
     all_trajectories = []
     for env_actions in env_actions_list:
-        ee_positions_world = compute_future_ee_poses_using_controller(env, env_actions[:, :6], obs)
-        # Add current position as the starting point
-        all_positions = np.vstack([current_tcp_world, ee_positions_world])
+        ee_positions_world = compute_future_ee_poses_using_controller(env, env_actions, obs)
+        # Add current position as the starting point (expanding dims for vstack compatibility)
+        all_positions = np.vstack([current_tcp_world[np.newaxis], ee_positions_world])
         all_trajectories.append(all_positions)
     
+    # Reshape to (num_arms, num_samples, horizon, 3)
+    all_trajectories_array = np.array(all_trajectories).transpose(2, 0, 1, 3)
+    num_arms = all_trajectories_array.shape[0]
+    num_trajectories = all_trajectories_array.shape[1]
+
     annotated_images = {}
     
     # Generate distinct colors for each trajectory
-    num_trajectories = len(all_trajectories)
     trajectory_colors = []
     if mmd_mode:
         # Use HSV color space for better color distribution
@@ -274,32 +271,22 @@ def visualize_trajectory_on_cameras(env, obs, env_actions_list, mmd_mode=False, 
             color_bgr = cv2.cvtColor(color_hsv, cv2.COLOR_HSV2BGR)[0, 0]
             trajectory_colors.append(tuple(int(c) for c in color_bgr))
     else:
-        # Single trajectory: use green to red gradient (as before)
-        trajectory_colors = [(0, 255, 0)]  # Will be replaced with gradient
+        # Single trajectory: placeholder for gradient
+        trajectory_colors = [(0, 255, 0)]
     
     for cam_name in [camera_name]:
-        # Get camera parameters - try different possible key names
-        cam_params = obs['camera_param'][cam_name]
+        # Get camera parameters from the updated observation structure
+        cam_params = obs['observation'][cam_name]
         
-        # Try to get extrinsic and intrinsic with different possible names
-        if 'extrinsic_cv' in cam_params:
-            extrinsic = cam_params['extrinsic_cv']
-        elif 'extrinsic' in cam_params:
-            extrinsic = cam_params['extrinsic']
-        else:
-            log.warning(f"Could not find extrinsic for {cam_name}")
-            continue
-            
-        if 'intrinsic_cv' in cam_params:
-            intrinsic = cam_params['intrinsic_cv']
-        elif 'intrinsic' in cam_params:
-            intrinsic = cam_params['intrinsic']
-        else:
-            log.warning(f"Could not find intrinsic for {cam_name}")
+        # Try to get extrinsic and intrinsic (prioritizing _cv suffix per New Function 1)
+        extrinsic = cam_params.get('extrinsic_cv', cam_params.get('extrinsic'))
+        intrinsic = cam_params.get('intrinsic_cv', cam_params.get('intrinsic'))
+        
+        if extrinsic is None or intrinsic is None:
             continue
         
         # Get image
-        img = obs['image'][cam_name]['rgb'].copy()
+        img = obs['observation'][cam_name]['rgb'].copy()
         img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
         
         # Ensure image is in correct format (uint8 BGR)
@@ -310,66 +297,68 @@ def visualize_trajectory_on_cameras(env, obs, env_actions_list, mmd_mode=False, 
         elif img.shape[2] == 4:  # RGBA
             img = cv2.cvtColor(img, cv2.COLOR_RGBA2BGR)
         
-        # Draw all trajectories
-        for traj_idx, all_positions in enumerate(all_trajectories):
-            # Project 3D positions to 2D
-            points_2d, depths = project_3d_to_2d(all_positions, extrinsic, intrinsic)
-            
-            # Filter points behind camera
-            valid_mask = depths > 0
-            
-            # Get color for this trajectory
-            if mmd_mode:
-                traj_color = trajectory_colors[traj_idx]
-            else:
-                # Single trajectory: use gradient from green to red
-                traj_color = None  # Will use per-point colors
-            
-            # Draw trajectory
-            for i in range(len(points_2d)):
-                if not valid_mask[i]:
-                    continue
+        # Draw all trajectories for both arms
+        for arm_idx in range(num_arms):
+            for traj_idx in range(num_trajectories):
+                all_positions = all_trajectories_array[arm_idx, traj_idx]
                 
-                x, y = int(points_2d[i, 0]), int(points_2d[i, 1])
+                # Project 3D positions to 2D
+                points_2d, depths = project_3d_to_2d(all_positions, extrinsic, intrinsic)
                 
-                # Check if point is within image bounds
-                if 0 <= x < img.shape[1] and 0 <= y < img.shape[0]:
-                    # Determine color
-                    if mmd_mode:
-                        point_color = traj_color
-                    else:
-                        # Gradient from green (current) to red (future)
-                        ratio = i / max(1, len(points_2d) - 1)
-                        b = int(0 * (1 - ratio) + 0 * ratio)
-                        g = int(255 * (1 - ratio) + 0 * ratio)
-                        r = int(0 * (1 - ratio) + 255 * ratio)
-                        point_color = (b, g, r)
+                # Filter points behind camera
+                valid_mask = depths > 0
+                
+                # Get color for this trajectory
+                if mmd_mode:
+                    traj_color = trajectory_colors[traj_idx]
+                else:
+                    traj_color = None  # Will use per-point colors
+                
+                # Draw trajectory
+                for i in range(len(points_2d)):
+                    if not valid_mask[i]:
+                        continue
                     
-                    # Draw point (no text labels in MMD mode)
-                    if i == 0 and traj_idx == 0:  # Only draw current position once
-                        # Current position - larger circle with white outline
-                        cv2.circle(img, (x, y), 8, (0, 255, 0), -1)
-                        cv2.circle(img, (x, y), 10, (255, 255, 255), 2)
-                        if not mmd_mode:
-                            cv2.putText(img, "Current", (x + 12, y + 5),
-                                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
-                    elif i > 0:
-                        # Future positions
-                        circle_radius = 4 if mmd_mode else 6
-                        cv2.circle(img, (x, y), circle_radius, point_color, -1)
-                        if not mmd_mode:
-                            cv2.circle(img, (x, y), 8, (255, 255, 255), 1)
-                            cv2.putText(img, f"t+{i}", (x + 10, y - 10),
-                                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, point_color, 2)
-                
-                # Draw line connecting points
-                if i > 0 and valid_mask[i-1]:
-                    x_prev, y_prev = int(points_2d[i-1, 0]), int(points_2d[i-1, 1])
-                    if (0 <= x_prev < img.shape[1] and 0 <= y_prev < img.shape[0] and
-                        0 <= x < img.shape[1] and 0 <= y < img.shape[0]):
-                        line_width = 1 if mmd_mode else 2
-                        line_color = traj_color if mmd_mode else point_color
-                        cv2.line(img, (x_prev, y_prev), (x, y), line_color, line_width)
+                    x, y = int(points_2d[i, 0]), int(points_2d[i, 1])
+                    
+                    # Check if point is within image bounds
+                    if 0 <= x < img.shape[1] and 0 <= y < img.shape[0]:
+                        # Determine color
+                        if mmd_mode:
+                            point_color = traj_color
+                        else:
+                            # Gradient from green (current) to red (future)
+                            ratio = i / max(1, len(points_2d) - 1)
+                            b = 0
+                            g = int(255 * (1 - ratio))
+                            r = int(255 * ratio)
+                            point_color = (b, g, r)
+                        
+                        # Draw point
+                        if i == 0 and traj_idx == 0:  # Current position
+                            cv2.circle(img, (x, y), 8, (0, 255, 0), -1)
+                            cv2.circle(img, (x, y), 10, (255, 255, 255), 2)
+                            if not mmd_mode:
+                                label = "Left" if arm_idx == 0 else "Right"
+                                cv2.putText(img, label, (x + 12, y + 5),
+                                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+                        elif i > 0:
+                            # Future positions
+                            circle_radius = 4 if mmd_mode else 6
+                            cv2.circle(img, (x, y), circle_radius, point_color, -1)
+                            if not mmd_mode:
+                                cv2.circle(img, (x, y), 8, (255, 255, 255), 1)
+                                cv2.putText(img, f"t+{i}", (x + 10, y - 10),
+                                           cv2.FONT_HERSHEY_SIMPLEX, 0.4, point_color, 2)
+                    
+                    # Draw line connecting points
+                    if i > 0 and valid_mask[i-1]:
+                        x_prev, y_prev = int(points_2d[i-1, 0]), int(points_2d[i-1, 1])
+                        if (0 <= x_prev < img.shape[1] and 0 <= y_prev < img.shape[0] and
+                            0 <= x < img.shape[1] and 0 <= y < img.shape[0]):
+                            line_width = 1 if mmd_mode else 2
+                            line_color = traj_color if mmd_mode else point_color
+                            cv2.line(img, (x_prev, y_prev), (x, y), line_color, line_width)
         
         annotated_images[cam_name] = img
     

@@ -599,7 +599,6 @@ def eval_policy(task_name,
 
             for i, action in enumerate(actions[:exec_steps]):
                 TASK_ENV.take_action(action)
-                breakpoint()
                 
                 # We need to update observation window for every step in the chunk 
                 # (except the very last one where we loop back to top)

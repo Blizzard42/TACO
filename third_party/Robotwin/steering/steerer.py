@@ -154,15 +154,15 @@ class PivotSteerer:
         Args:
             env: The environment
             obs: Current observation dict
-            env_actions_list: List of (N, 7) action arrays
+            env_actions_list: List of (N, 14) action arrays
             num_trajectories: Number of representative trajectories to visualize
             
         Returns:
             annotated_image: BGR image with trajectories drawn
-            selected_indices: Indices of the selected representative trajectories
+            selected_indices: List containing indices of selected trajectories for both arms
         """
         
-        # Get current EE pose
+        # Get current EE pose for both arms
         current_ee_pose = np.stack([env.robot.get_left_ee_pose()[:3], env.robot.get_right_ee_pose()[:3]], axis=0)
         
         # Compute future end-effector positions for all trajectories
@@ -182,9 +182,10 @@ class PivotSteerer:
             all_trajectories.append(all_positions)
         
         # Convert list to numpy array for selection algorithm
-        all_trajectories = np.array(all_trajectories).transpose(2, 0, 1, 3)  # Shape: (2, num_samples, horizon, 3)
+        # Shape transition: (num_samples, horizon, 2, 3) -> (2, num_samples, horizon, 3)
+        all_trajectories = np.array(all_trajectories).transpose(2, 0, 1, 3)
         
-        # Select representative trajectories based on cosine similarity
+        # Select representative trajectories for both arms
         selected_indices_left = select_representative_trajectories(
             all_trajectories[0], 
             num_trajectories=num_trajectories
@@ -197,7 +198,6 @@ class PivotSteerer:
         
         # Get camera parameters
         cam_params = obs['observation'][self.camera_name]
-
         extrinsic = cam_params['extrinsic_cv']
         intrinsic = cam_params['intrinsic_cv']
         
@@ -205,8 +205,7 @@ class PivotSteerer:
         img = obs['observation'][self.camera_name]['rgb'].copy()
         img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
         
-        # Define distinct colors for trajectories matching the prompt template
-        # Order: Red, Orange, Blue, Cyan, Magenta (BGR format for OpenCV)
+        # Define distinct colors for trajectories
         predefined_colors = [
             (0, 0, 255),    # Red
             (0, 165, 255),  # Orange
@@ -215,103 +214,97 @@ class PivotSteerer:
             (255, 0, 255),  # Magenta
         ]
         
-        # Draw only the selected representative trajectories
-        for i, traj_idx in enumerate(selected_indices_left):
-            all_positions = all_trajectories[0, traj_idx, :16]
-            
-            # Project 3D positions to 2D
-            points_2d, depths = project_3d_to_2d(all_positions, extrinsic, intrinsic)
-            
-            # Filter points behind camera
-            valid_mask = depths > 0
-            
-            traj_color = predefined_colors[i % len(predefined_colors)]
-            
-            # Track last valid point for arrow head
-            last_valid_idx = None
-            second_last_valid_idx = None
-            
-            # Draw trajectory
-            for j in range(len(points_2d)):
-                if not valid_mask[j]:
-                    continue
-                
-                x, y = int(points_2d[j, 0]), int(points_2d[j, 1])
-                
-                # Check if point is within image bounds
-                if 0 <= x < img.shape[1] and 0 <= y < img.shape[0]:
-                    if j == 0 and i == 0:  # Only draw current position once
-                        # Current position - larger circle with white outline
-                        cv2.circle(img, (x, y), 8, (0, 255, 0), -1)
-                        cv2.circle(img, (x, y), 10, (255, 255, 255), 2)
-                    elif j > 0:
-                        # Future positions
-                        cv2.circle(img, (x, y), 4, traj_color, -1)
-                    
-                    # Track valid points for arrow head
-                    second_last_valid_idx = last_valid_idx
-                    last_valid_idx = j
-                
-                # Draw line connecting points
-                if j > 0 and valid_mask[j-1]:
-                    x_prev, y_prev = int(points_2d[j-1, 0]), int(points_2d[j-1, 1])
-                    if (0 <= x_prev < img.shape[1] and 0 <= y_prev < img.shape[0] and
-                        0 <= x < img.shape[1] and 0 <= y < img.shape[0]):
-                        cv2.line(img, (x_prev, y_prev), (x, y), traj_color, self.line_thickness)
-            
-            # Draw arrow head at the end of trajectory
-            if last_valid_idx is not None and second_last_valid_idx is not None:
-                x_last, y_last = int(points_2d[last_valid_idx, 0]), int(points_2d[last_valid_idx, 1])
-                x_prev, y_prev = int(points_2d[second_last_valid_idx, 0]), int(points_2d[second_last_valid_idx, 1])
-                
-                if (0 <= x_last < img.shape[1] and 0 <= y_last < img.shape[0]):
-                    # Calculate arrow direction
-                    dx = x_last - x_prev
-                    dy = y_last - y_prev
-                    length = np.sqrt(dx**2 + dy**2)
-                    
-                    if length > 0:
-                        # Normalize direction
-                        dx /= length
-                        dy /= length
-                        
-                        # Arrow head parameters
-                        arrow_length = 15
-                        arrow_angle = np.pi / 6  # 30 degrees
-                        
-                        # Calculate arrow head points
-                        arrow_tip = (x_last, y_last)
-                        arrow_left = (
-                            int(x_last - arrow_length * (dx * np.cos(arrow_angle) + dy * np.sin(arrow_angle))),
-                            int(y_last - arrow_length * (dy * np.cos(arrow_angle) - dx * np.sin(arrow_angle)))
-                        )
-                        arrow_right = (
-                            int(x_last - arrow_length * (dx * np.cos(arrow_angle) - dy * np.sin(arrow_angle))),
-                            int(y_last - arrow_length * (dy * np.cos(arrow_angle) + dx * np.sin(arrow_angle)))
-                        )
-                        
-                        # Draw arrow head as a filled triangle
-                        pts = np.array([arrow_tip, arrow_left, arrow_right], np.int32)
-                        cv2.fillPoly(img, [pts], traj_color)
-                        cv2.polylines(img, [pts], True, traj_color, self.line_thickness)
+        # Draw selected representative trajectories for both arms
+        # arm_idx 0: Left, arm_idx 1: Right
+        arm_selected_indices = [selected_indices_left, selected_indices_right]
         
+        for arm_idx, selected_indices in enumerate(arm_selected_indices):
+            for i, traj_idx in enumerate(selected_indices):
+                # Take the first 16 steps or horizon limit as per original logic
+                all_positions = all_trajectories[arm_idx, traj_idx]
+                
+                # Project 3D positions to 2D
+                points_2d, depths = project_3d_to_2d(all_positions, extrinsic, intrinsic)
+                
+                # Filter points behind camera
+                valid_mask = depths > 0
+                traj_color = predefined_colors[i % len(predefined_colors)]
+                
+                # Track valid points for arrow head
+                last_valid_idx = None
+                second_last_valid_idx = None
+                
+                # Draw trajectory
+                for j in range(len(points_2d)):
+                    if not valid_mask[j]:
+                        continue
+                    
+                    x, y = int(points_2d[j, 0]), int(points_2d[j, 1])
+                    
+                    # Check if point is within image bounds
+                    if 0 <= x < img.shape[1] and 0 <= y < img.shape[0]:
+                        if j == 0 and i == 0:  # Only draw current position once per arm
+                            # Current position - larger circle with white outline
+                            cv2.circle(img, (x, y), 8, (0, 255, 0), -1)
+                            cv2.circle(img, (x, y), 10, (255, 255, 255), 2)
+                        elif j > 0:
+                            # Future positions
+                            cv2.circle(img, (x, y), 4, traj_color, -1)
+                        
+                        # Track valid points for arrow head
+                        second_last_valid_idx = last_valid_idx
+                        last_valid_idx = j
+                    
+                    # Draw line connecting points
+                    if j > 0 and valid_mask[j-1]:
+                        x_prev, y_prev = int(points_2d[j-1, 0]), int(points_2d[j-1, 1])
+                        if (0 <= x_prev < img.shape[1] and 0 <= y_prev < img.shape[0] and
+                            0 <= x < img.shape[1] and 0 <= y < img.shape[0]):
+                            cv2.line(img, (x_prev, y_prev), (x, y), traj_color, self.line_thickness)
+                
+                # Draw arrow head at the end of trajectory
+                if last_valid_idx is not None and second_last_valid_idx is not None:
+                    x_last, y_last = int(points_2d[last_valid_idx, 0]), int(points_2d[last_valid_idx, 1])
+                    x_prev, y_prev = int(points_2d[second_last_valid_idx, 0]), int(points_2d[second_last_valid_idx, 1])
+                    
+                    if (0 <= x_last < img.shape[1] and 0 <= y_last < img.shape[0]):
+                        dx, dy = x_last - x_prev, y_last - y_prev
+                        length = np.sqrt(dx**2 + dy**2)
+                        
+                        if length > 0:
+                            dx, dy = dx / length, dy / length
+                            arrow_length, arrow_angle = 15, np.pi / 6
+                            
+                            arrow_tip = (x_last, y_last)
+                            arrow_left = (
+                                int(x_last - arrow_length * (dx * np.cos(arrow_angle) + dy * np.sin(arrow_angle))),
+                                int(y_last - arrow_length * (dy * np.cos(arrow_angle) - dx * np.sin(arrow_angle)))
+                            )
+                            arrow_right = (
+                                int(x_last - arrow_length * (dx * np.cos(arrow_angle) - dy * np.sin(arrow_angle))),
+                                int(y_last - arrow_length * (dy * np.cos(arrow_angle) + dx * np.sin(arrow_angle)))
+                            )
+                            
+                            pts = np.array([arrow_tip, arrow_left, arrow_right], np.int32)
+                            cv2.fillPoly(img, [pts], traj_color)
+                            cv2.polylines(img, [pts], True, traj_color, self.line_thickness)
+            
         # Add legend with color names
         color_names = ["Red", "Orange", "Blue", "Cyan", "Magenta"]
         legend_y = 30
-        for i, color in enumerate(predefined_colors[:len(selected_indices_left)]):
+        for i, color in enumerate(predefined_colors[:num_trajectories]):
             cv2.circle(img, (30, legend_y), 6, color, -1)
             cv2.putText(img, color_names[i], (45, legend_y + 5),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
             legend_y += 25
         
-        return img, selected_indices_left
+        return img, (selected_indices_left, selected_indices_right)
 
     def select_trajectory(
         self,
         env,
         obs: Dict,
         action_samples: torch.Tensor,
-        env_adapter: Any,
         step_num: int,
         episode_id: int,
         mmd_score: float,
@@ -325,7 +318,6 @@ class PivotSteerer:
             env: The environment
             obs: Current observation
             action_samples: [num_samples, batch_size, horizon_steps, action_dim]
-            env_adapter: Environment adapter for postprocessing actions
             step_num: Current step number
             mmd_score: The MMD score that triggered this call
             task_description: Task-specific description to insert into the prompt template
@@ -338,12 +330,7 @@ class PivotSteerer:
         self.step_count = step_num
         
         # Convert all sampled actions to env_actions format
-        all_env_actions = []
-        for i in range(action_samples.shape[0]):
-            sample_env_actions = env_adapter.postprocess(
-                action_samples[i].squeeze(0).float().cpu().numpy()
-            )
-            all_env_actions.append(sample_env_actions)
+        all_env_actions = [action_samples[i].float().cpu().numpy() for i in range(action_samples.shape[0])]
         
         # Visualize representative trajectories
         annotated_img_bgr, selected_indices = self.visualize_trajectories_on_camera(
