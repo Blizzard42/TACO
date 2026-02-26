@@ -307,7 +307,7 @@ def eval_policy(task_name,
     log_dir = usr_args.get("log_dir", "./eval_result")
     
     # Steering constants
-    act_steps = 50 
+    act_steps = 25
     horizon_steps = 50 # Assuming this aligns with model cfg
 
     vlm_client = None
@@ -456,7 +456,9 @@ def eval_policy(task_name,
                 # 1. Sample actions for MMD
                 # model.get_action supports num_samples (returns [num_samples, horizon, dim])
                 with torch.inference_mode():
+                    print("Generating Action Samples")
                     action_samples = model.get_action(num_samples=num_mmd_samples)
+                    print("Finished Generating Action Samples")
                     
                     # Ensure tensor for calculation (get_action likely returns tensor or numpy)
                     if isinstance(action_samples, np.ndarray):
@@ -491,6 +493,7 @@ def eval_policy(task_name,
                     guidance_traj_list = []
                     
                     if mmd_score > mmd_threshold:
+                        print("Attempting Steering")
                         print(f"\033[93mMMD Trigger ({mmd_score:.4f} > {mmd_threshold}). Steering...\033[0m")
                         
                         # Prepare data for steerer
@@ -502,7 +505,6 @@ def eval_policy(task_name,
                                 env=None, # Not used in current implementation
                                 obs=observation,
                                 action_samples=action_samples, # Pass tensor or numpy depending on steerer impl
-                                env_adapter=None, # Explicitly None per instruction
                                 step_num=cnt_step,
                                 episode_id=TASK_ENV.test_num,
                                 mmd_score=mmd_score,
@@ -563,6 +565,7 @@ def eval_policy(task_name,
                 
                 # Visualization (Optional if MMD computed)
                 if compute_mmd:
+                    print("Attempting Visualization of Trajectory Rollout")
                     # Create directory
                     episode_rollout_dir = os.path.join(log_dir, "rollout_img", f"episode_{TASK_ENV.test_num}")
                     os.makedirs(episode_rollout_dir, exist_ok=True)
@@ -592,7 +595,7 @@ def eval_policy(task_name,
 
             # Execute Action Chunk
             # model.pi0_step usually defines execution horizon (e.g. 10 or 50)
-            exec_steps = model.pi0_step
+            exec_steps = 25 # model.pi0_step
             # Handle if actions is tensor
             if isinstance(actions, torch.Tensor):
                 actions = actions.cpu().numpy()
@@ -618,7 +621,7 @@ def eval_policy(task_name,
 
         # Report stats
         if compute_mmd and len(mmd_scores) > 0:
-            report_episode_statistics(save_dir, TASK_ENV.test_num, mmd_scores, 
+            report_episode_statistics(log_dir, TASK_ENV.test_num, mmd_scores, 
                                       vlm_intervention_count, vlm_intervention_steps, succ,
                                       act_steps, num_mmd_samples, mmd_gamma, mmd_threshold)
             all_episode_mmd_scores.append(mmd_scores)
@@ -651,7 +654,7 @@ def eval_policy(task_name,
     # Final Statistics
     if compute_mmd and len(all_episode_mmd_scores) > 0:
         # Simple aggregated report
-        with open(os.path.join(save_dir, "final_steering_stats.txt"), 'w') as f:
+        with open(os.path.join(log_dir, "final_steering_stats.txt"), 'w') as f:
             f.write(f"Total Episodes: {len(all_episode_mmd_scores)}\n")
             f.write(f"Total Interventions: {sum(all_episode_vlm_interventions)}\n")
 

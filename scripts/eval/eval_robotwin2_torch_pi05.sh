@@ -17,7 +17,7 @@ policy_path="/nethome/gpatlin3/flash/huggingface/hub/models--rhodes-team-teleai-
 task_config=demo_clean
 seed=1
 task_name=handover_block
-tag=debug
+tag=debug_pivot
 
 # Steering Parameters:
 compute_mmd=True

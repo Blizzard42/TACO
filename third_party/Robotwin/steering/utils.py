@@ -336,18 +336,18 @@ def visualize_trajectory_on_cameras(env, obs, env_actions_list, mmd_mode=False, 
                         
                         # Draw point
                         if i == 0 and traj_idx == 0:  # Current position
-                            cv2.circle(img, (x, y), 8, (0, 255, 0), -1)
-                            cv2.circle(img, (x, y), 10, (255, 255, 255), 2)
+                            cv2.circle(img, (x, y), 2, (0, 255, 0), -1)
+                            cv2.circle(img, (x, y), 3, (255, 255, 255), 1)
                             if not mmd_mode:
                                 label = "Left" if arm_idx == 0 else "Right"
                                 cv2.putText(img, label, (x + 12, y + 5),
                                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
                         elif i > 0:
                             # Future positions
-                            circle_radius = 4 if mmd_mode else 6
+                            circle_radius = 1 if mmd_mode else 2
                             cv2.circle(img, (x, y), circle_radius, point_color, -1)
                             if not mmd_mode:
-                                cv2.circle(img, (x, y), 8, (255, 255, 255), 1)
+                                cv2.circle(img, (x, y), 2, (255, 255, 255), 1)
                                 cv2.putText(img, f"t+{i}", (x + 10, y - 10),
                                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, point_color, 2)
                     
@@ -356,7 +356,7 @@ def visualize_trajectory_on_cameras(env, obs, env_actions_list, mmd_mode=False, 
                         x_prev, y_prev = int(points_2d[i-1, 0]), int(points_2d[i-1, 1])
                         if (0 <= x_prev < img.shape[1] and 0 <= y_prev < img.shape[0] and
                             0 <= x < img.shape[1] and 0 <= y < img.shape[0]):
-                            line_width = 1 if mmd_mode else 2
+                            line_width = 2 if mmd_mode else 3
                             line_color = traj_color if mmd_mode else point_color
                             cv2.line(img, (x_prev, y_prev), (x, y), line_color, line_width)
         

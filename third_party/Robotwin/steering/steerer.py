@@ -245,11 +245,11 @@ class PivotSteerer:
                     if 0 <= x < img.shape[1] and 0 <= y < img.shape[0]:
                         if j == 0 and i == 0:  # Only draw current position once per arm
                             # Current position - larger circle with white outline
-                            cv2.circle(img, (x, y), 8, (0, 255, 0), -1)
-                            cv2.circle(img, (x, y), 10, (255, 255, 255), 2)
+                            cv2.circle(img, (x, y), 2, (0, 255, 0), -1)
+                            cv2.circle(img, (x, y), 3, (255, 255, 255), 2)
                         elif j > 0:
                             # Future positions
-                            cv2.circle(img, (x, y), 4, traj_color, -1)
+                            cv2.circle(img, (x, y), 1, traj_color, -1)
                         
                         # Track valid points for arrow head
                         second_last_valid_idx = last_valid_idx
@@ -263,39 +263,39 @@ class PivotSteerer:
                             cv2.line(img, (x_prev, y_prev), (x, y), traj_color, self.line_thickness)
                 
                 # Draw arrow head at the end of trajectory
-                if last_valid_idx is not None and second_last_valid_idx is not None:
-                    x_last, y_last = int(points_2d[last_valid_idx, 0]), int(points_2d[last_valid_idx, 1])
-                    x_prev, y_prev = int(points_2d[second_last_valid_idx, 0]), int(points_2d[second_last_valid_idx, 1])
+                # if last_valid_idx is not None and second_last_valid_idx is not None:
+                #     x_last, y_last = int(points_2d[last_valid_idx, 0]), int(points_2d[last_valid_idx, 1])
+                #     x_prev, y_prev = int(points_2d[second_last_valid_idx, 0]), int(points_2d[second_last_valid_idx, 1])
                     
-                    if (0 <= x_last < img.shape[1] and 0 <= y_last < img.shape[0]):
-                        dx, dy = x_last - x_prev, y_last - y_prev
-                        length = np.sqrt(dx**2 + dy**2)
+                #     if (0 <= x_last < img.shape[1] and 0 <= y_last < img.shape[0]):
+                #         dx, dy = x_last - x_prev, y_last - y_prev
+                #         length = np.sqrt(dx**2 + dy**2)
                         
-                        if length > 0:
-                            dx, dy = dx / length, dy / length
-                            arrow_length, arrow_angle = 15, np.pi / 6
+                #         if length > 0:
+                #             dx, dy = dx / length, dy / length
+                #             arrow_length, arrow_angle = 15, np.pi / 6
                             
-                            arrow_tip = (x_last, y_last)
-                            arrow_left = (
-                                int(x_last - arrow_length * (dx * np.cos(arrow_angle) + dy * np.sin(arrow_angle))),
-                                int(y_last - arrow_length * (dy * np.cos(arrow_angle) - dx * np.sin(arrow_angle)))
-                            )
-                            arrow_right = (
-                                int(x_last - arrow_length * (dx * np.cos(arrow_angle) - dy * np.sin(arrow_angle))),
-                                int(y_last - arrow_length * (dy * np.cos(arrow_angle) + dx * np.sin(arrow_angle)))
-                            )
+                #             arrow_tip = (x_last, y_last)
+                #             arrow_left = (
+                #                 int(x_last - arrow_length * (dx * np.cos(arrow_angle) + dy * np.sin(arrow_angle))),
+                #                 int(y_last - arrow_length * (dy * np.cos(arrow_angle) - dx * np.sin(arrow_angle)))
+                #             )
+                #             arrow_right = (
+                #                 int(x_last - arrow_length * (dx * np.cos(arrow_angle) - dy * np.sin(arrow_angle))),
+                #                 int(y_last - arrow_length * (dy * np.cos(arrow_angle) + dx * np.sin(arrow_angle)))
+                #             )
                             
-                            pts = np.array([arrow_tip, arrow_left, arrow_right], np.int32)
-                            cv2.fillPoly(img, [pts], traj_color)
-                            cv2.polylines(img, [pts], True, traj_color, self.line_thickness)
+                #             pts = np.array([arrow_tip, arrow_left, arrow_right], np.int32)
+                #             cv2.fillPoly(img, [pts], traj_color)
+                #             cv2.polylines(img, [pts], True, traj_color, self.line_thickness)
             
         # Add legend with color names
         color_names = ["Red", "Orange", "Blue", "Cyan", "Magenta"]
         legend_y = 30
         for i, color in enumerate(predefined_colors[:num_trajectories]):
-            cv2.circle(img, (30, legend_y), 6, color, -1)
+            cv2.circle(img, (30, legend_y), 2, color, -1)
             cv2.putText(img, color_names[i], (45, legend_y + 5),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.25, (255, 255, 255), 2)
             legend_y += 25
         
         return img, (selected_indices_left, selected_indices_right)

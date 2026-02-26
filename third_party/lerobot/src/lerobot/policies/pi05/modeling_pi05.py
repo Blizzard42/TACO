@@ -812,6 +812,7 @@ class PI05Pytorch(nn.Module):  # see openpi `PI0Pytorch`
                 x_t = x_t + dt * v_t
                 time += dt
             all_actions.append(x_t)
+            noise =  None  # Reset noise for next sample
         
         # Stack all samples: [num_samples, batch_size, horizon_steps, action_dim]
         all_actions = torch.stack(all_actions, dim=0)
