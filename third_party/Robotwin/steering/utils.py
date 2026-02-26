@@ -196,7 +196,7 @@ def compute_future_ee_poses_using_controller(env, env_actions, obs):
         # Combine rotations
         combined_rot = mat @ g_trans @ delta
         # Offset by (bias - 0.12) along the local X axis of the combined frame
-        offset = combined_rot @ np.array([bias - 0.12, 0, 0])
+        offset = combined_rot @ np.array([bias - 0.24, 0, 0])
         return world_pose.p + offset
     
     # Iterate through actions and compute cumulative poses

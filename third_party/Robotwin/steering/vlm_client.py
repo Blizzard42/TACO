@@ -3,7 +3,7 @@ import json
 import re
 import requests
 from io import BytesIO
-from typing import List, Optional
+from typing import List, Optional, Tuple
 import torch
 from PIL import Image
 import random
@@ -45,24 +45,21 @@ class VLMClient:
         image.save(buffered, format="PNG")
         return base64.b64encode(buffered.getvalue()).decode('utf-8')
 
-    def _extract_chosen_trajectory(self, text_output: str, num_trajectories: int) -> int:
+    def _extract_chosen_trajectories(self, text_output: str, num_trajectories: int) -> Tuple[int, int]:
         """
-        Parses the text output to extract the chosen trajectory index.
-        Supports both color-based ("red", "orange", "blue", "cyan", "magenta", "none") 
-        and numeric (0, 1, 2, ...) trajectory choices.
+        Parses the text output to extract chosen trajectory indices for both arms.
+        Looks for 'chosen_trajectory_left' and 'chosen_trajectory_right'.
         
         Returns:
-            int: The chosen trajectory index (0-based), or -1 if "none" is chosen, or 0 as default.
+            tuple: (idx_left, idx_right) - 0-based indices.
         """
         # Define color to index mapping
         color_to_idx = {
-            "red": 0,
-            "orange": 1,
-            "blue": 2,
-            "cyan": 3,
-            "magenta": 4,
-            "none": -1
+            "red": 0, "orange": 1, "blue": 2, "cyan": 3, "magenta": 4, "none": -1
         }
+        
+        # Default fallback values
+        results = {"left": 0, "right": 0}
         
         try:
             # Try JSON format first
@@ -72,73 +69,63 @@ class VLMClient:
                 json_str = text_output[json_start_index:json_end_index]
                 data = json.loads(json_str)
                 
-                if "chosen_trajectory" in data:
-                    choice = data["chosen_trajectory"]
-                    
-                    # Handle color-based choice
-                    if isinstance(choice, str):
-                        choice_lower = choice.lower().strip()
-                        if choice_lower in color_to_idx:
-                            idx = color_to_idx[choice_lower]
-                            if idx == -1:  # "none" was chosen
-                                print(f"VLM rejected all trajectories (chose 'none'). Defaulting to trajectory {random.randint(0, num_trajectories - 1)}.")
-                                return random.randint(0, num_trajectories - 1)
-                            if 0 <= idx < num_trajectories:
-                                return idx
+                for side in ["left", "right"]:
+                    key = f"chosen_trajectory_{side}"
+                    if key in data:
+                        choice = data[key]
                         
-                        # Try to extract number from string (backward compatibility)
-                        match = re.search(r'\d+', choice)
-                        if match:
-                            idx = int(match.group())
-                            if 0 <= idx < num_trajectories:
-                                return idx
-                    
-                    # Handle numeric choice
-                    elif isinstance(choice, int) and 0 <= choice < num_trajectories:
-                        return choice
+                        # Handle color-based choice
+                        if isinstance(choice, str):
+                            choice_lower = choice.lower().strip()
+                            if choice_lower in color_to_idx:
+                                idx = color_to_idx[choice_lower]
+                                results[side] = idx if idx != -1 else random.randint(0, num_trajectories - 1)
+                            else:
+                                # Regex fallback for string numbers
+                                match = re.search(r'\d+', choice)
+                                if match:
+                                    results[side] = int(match.group())
+                        
+                        # Handle numeric choice
+                        elif isinstance(choice, int):
+                            results[side] = choice
+                
+                # Validation
+                return (
+                    max(0, min(results["left"], num_trajectories - 1)),
+                    max(0, min(results["right"], num_trajectories - 1))
+                )
+
         except (json.JSONDecodeError, KeyError, ValueError):
             pass
         
-        # Try simple pattern matching for backward compatibility
-        patterns = [
-            r"trajectory[:\s]+(\d+)",
-            r"choose[:\s]+(\d+)",
-            r"select[:\s]+(\d+)",
-            r"option[:\s]+(\d+)",
-        ]
-        
-        for pattern in patterns:
+        # Fallback: Simple pattern matching for "left: X" or "right: Y"
+        for side in ["left", "right"]:
+            pattern = rf"{side}[:\s]+(?:trajectory|option|color)?[:\s]*(\w+)"
             match = re.search(pattern, text_output, re.IGNORECASE)
             if match:
-                idx = int(match.group(1))
-                if 0 <= idx < num_trajectories:
-                    return idx
-        
-        print(f"Warning: Could not parse trajectory choice from VLM output. Defaulting to trajectory 0.")
-        print(f"Output: {text_output[:200]}...")
-        return 0
+                val = match.group(1).lower()
+                if val in color_to_idx:
+                    results[side] = color_to_idx[val] if color_to_idx[val] != -1 else 0
+                elif val.isdigit():
+                    results[side] = int(val)
 
-    def select_trajectory(
+        print(f"Warning: Partial or failed parse. Using: L={results['left']}, R={results['right']}")
+        return results["left"], results["right"]
+
+    def select_trajectories(
         self, 
         annotated_image: Image.Image, 
         prompt_text: str,
         num_trajectories: int,
         max_new_tokens: int = 1024,
-        timeout: int = 60,
-        primitive: bool = False
-    ) -> tuple[int, str]:
+        timeout: int = 60
+    ) -> tuple[Tuple[int, int], str]:
         """
-        Send an annotated image to the VLM and get trajectory selection.
+        Send an annotated image to the VLM and get trajectory selections for both arms.
         
-        Args:
-            annotated_image: PIL Image with trajectories drawn on it.
-            prompt_text: The prompt to send to the VLM.
-            num_trajectories: Number of trajectories drawn on the image.
-            max_new_tokens: Maximum tokens in VLM response.
-            timeout: Request timeout in seconds.
-            
         Returns:
-            tuple: (chosen_trajectory_index, text_response)
+            tuple: ((idx_left, idx_right), text_response)
         """
         user_content = [
             {"type": "text", "text": prompt_text},
@@ -153,14 +140,8 @@ class VLMClient:
         payload = {
             "model": self.model_name,
             "messages": [
-                {
-                    "role": "system",
-                    "content": "You are an expert robot policy advisor."
-                },
-                {
-                    "role": "user",
-                    "content": user_content
-                }
+                {"role": "system", "content": "You are an expert robot policy advisor specializing in dual-arm coordination."},
+                {"role": "user", "content": user_content}
             ],
             "max_tokens": max_new_tokens,
             "temperature": 0.0,
@@ -177,25 +158,15 @@ class VLMClient:
             result = response.json()
             generated_text = result["choices"][0]["message"]["content"]
             
-            if primitive:
-                return None, generated_text
-            
-            chosen_idx = self._extract_chosen_trajectory(generated_text, num_trajectories)
+            chosen_idxs = self._extract_chosen_trajectories(generated_text, num_trajectories)
             self.last_text_responses = [generated_text]
             
-            return chosen_idx, generated_text
+            return chosen_idxs, generated_text
 
-        except requests.exceptions.Timeout:
-            print("Error: Request to VLM server timed out. Defaulting to trajectory 0.")
-            return random.randint(0, num_trajectories - 1), ""
-        except requests.exceptions.RequestException as e:
-            print(f"Error during request to VLM server: {e}. Defaulting to trajectory 0.")
-            return random.randint(0, num_trajectories - 1), ""
-        except (KeyError, IndexError) as e:
-            print(f"Error parsing VLM server response: {e}. Defaulting to trajectory 0.")
-            return random.randint(0, num_trajectories - 1), ""
+        except Exception as e:
+            print(f"VLM Request failed: {e}. Defaulting to (0, 0).")
+            return (0, 0), str(e)
 
     def get_last_text_responses(self) -> List[str]:
         """Get the text responses from the last VLM call."""
         return self.last_text_responses
-

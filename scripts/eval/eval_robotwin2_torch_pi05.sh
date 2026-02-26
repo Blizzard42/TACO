@@ -21,7 +21,7 @@ tag=debug_pivot
 
 # Steering Parameters:
 compute_mmd=True
-num_mmd_samples=100
+num_mmd_samples=10
 mmd_gamma=10.0
 use_pivot_steering=True
 use_primitive_steering=False

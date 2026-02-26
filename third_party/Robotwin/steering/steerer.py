@@ -310,9 +310,9 @@ class PivotSteerer:
         mmd_score: float,
         task_description: Optional[str] = None,
         num_trajectories: int = 5
-    ) -> tuple[int, str]:
+    ) -> tuple[tuple[int, int], str]:
         """
-        Visualize representative trajectories and query VLM to select the best one.
+        Visualize representative trajectories and query VLM to select the best one for each arm.
         
         Args:
             env: The environment
@@ -324,16 +324,16 @@ class PivotSteerer:
             num_trajectories: Number of representative trajectories to visualize (default: 5)
             
         Returns:
-            tuple: (selected_trajectory_index, vlm_response_text)
-                   Note: selected_trajectory_index is the index in the original action_samples
+            tuple: ((sel_idx_left, sel_idx_right), vlm_response_text)
+                   Note: indices are the original indices in action_samples
         """
         self.step_count = step_num
         
         # Convert all sampled actions to env_actions format
         all_env_actions = [action_samples[i].float().cpu().numpy() for i in range(action_samples.shape[0])]
         
-        # Visualize representative trajectories
-        annotated_img_bgr, selected_indices = self.visualize_trajectories_on_camera(
+        # Visualize representative trajectories - returns img and tuple of (left_indices, right_indices)
+        annotated_img_bgr, (sel_indices_l, sel_indices_r) = self.visualize_trajectories_on_camera(
             env, obs, all_env_actions, num_trajectories=num_trajectories
         )
         
@@ -354,15 +354,17 @@ class PivotSteerer:
             # Remove the placeholder if no task description provided
             prompt = prompt.replace("<TASK_DESCRIPTION/>", "")
         
-        # Query VLM (VLM will select from color names: red, orange, blue, cyan, magenta)
-        selected_vis_idx, vlm_response = self.vlm_client.select_trajectory(
+        # Query VLM to select 1 index for the left arm and 1 for the right arm
+        # We assume the VLM client returns a tuple/list of two visual indices
+        (vis_idx_l, vis_idx_r), vlm_response = self.vlm_client.select_trajectories(
             pil_image, 
             prompt,
-            num_trajectories=len(selected_indices)
+            num_trajectories=num_trajectories
         )
         
-        # Map back to original trajectory index
-        selected_original_idx = selected_indices[selected_vis_idx]
+        # Map back to original trajectory indices
+        orig_idx_l = sel_indices_l[vis_idx_l]
+        orig_idx_r = sel_indices_r[vis_idx_r]
         
         # Save annotated image and response if save_dir is set
         if self.save_dir:
@@ -375,9 +377,10 @@ class PivotSteerer:
             with open(response_path, 'w', encoding='utf-8') as f:
                 f.write(f"Step: {step_num}\n")
                 f.write(f"MMD Score: {mmd_score:.6f}\n")
-                f.write(f"Selected Trajectory (visual): {selected_vis_idx}\n")
-                f.write(f"Selected Trajectory (original): {selected_original_idx}\n")
-                f.write(f"Representative Indices: {selected_indices.tolist()}\n\n")
+                f.write(f"Selected (visual) - Left: {vis_idx_l}, Right: {vis_idx_r}\n")
+                f.write(f"Selected (original) - Left: {orig_idx_l}, Right: {orig_idx_r}\n")
+                f.write(f"Rep Indices Left: {sel_indices_l.tolist()}\n")
+                f.write(f"Rep Indices Right: {sel_indices_r.tolist()}\n\n")
                 f.write(f"Prompt used:\n{prompt}\n\n")
                 f.write("VLM Response:\n")
                 f.write(vlm_response)
@@ -385,9 +388,9 @@ class PivotSteerer:
             print(f"Saved pivot visualization to {img_save_path}")
             print(f"Saved VLM response to {response_path}")
         
-        print(f"VLM selected trajectory {selected_vis_idx} (original idx: {selected_original_idx}, MMD score: {mmd_score:.6f})")
+        print(f"VLM selected: L={vis_idx_l} (orig: {orig_idx_l}), R={vis_idx_r} (orig: {orig_idx_r})")
         
-        return selected_original_idx, vlm_response
+        return (orig_idx_l, orig_idx_r), vlm_response
     
     
 class PrimitiveSteerer:

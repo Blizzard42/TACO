@@ -13,6 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import time as time_lib
 
 import builtins
 import logging
@@ -750,8 +751,6 @@ class PI05Pytorch(nn.Module):  # see openpi `PI0Pytorch`
 
         bsize = tokens.shape[0]
         device = tokens.device
-
-        # Determine if we need to use guidance
         use_guidance = guidance_actions is not None and guidance_scale > 0.0
 
         prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(images, img_masks, tokens, masks)
@@ -761,6 +760,8 @@ class PI05Pytorch(nn.Module):  # see openpi `PI0Pytorch`
         prefix_att_2d_masks_4d = self._prepare_attention_masks_4d(prefix_att_2d_masks)
         self.paligemma_with_expert.paligemma.language_model.config._attn_implementation = "eager"  # noqa: SLF001
 
+        print("Begin Paligemma Forward")
+        start_time = time_lib.perf_counter()
         _, past_key_values = self.paligemma_with_expert.forward(
             attention_mask=prefix_att_2d_masks_4d,
             position_ids=prefix_position_ids,
@@ -768,6 +769,8 @@ class PI05Pytorch(nn.Module):  # see openpi `PI0Pytorch`
             inputs_embeds=[prefix_embs, None],
             use_cache=True,
         )
+        end_time = time_lib.perf_counter()
+        print(f"Paligemma Forward Time: {end_time - start_time:.4f} seconds")
 
         dt = -1.0 / num_steps
         dt = torch.tensor(dt, dtype=torch.float32, device=device)
@@ -797,7 +800,7 @@ class PI05Pytorch(nn.Module):  # see openpi `PI0Pytorch`
                 if use_guidance:
                     # Everything in original dtype (bfloat16) is fine for this
                     clean_x_t_hat = x_t + (1.0 - expanded_time.reshape(expanded_time.shape[0], 1, 1)) * v_t   # Line 26 of Alg 1 of RTC paper: https://arxiv.org/pdf/2506.07339
-                    residual = (clean_x_t_hat - guidance_actions) # [bsz, H, A]
+                    residual = F.pad(clean_x_t_hat[..., :guidance_actions.shape[-1]] - guidance_actions, (0, 18), mode="constant", value=0.0) # [bsz, H, A]
 
                     # Analytic gradient: dL/dv = (1 - t) * residual
                     grad_vel = (1.0 - expanded_time.reshape(expanded_time.shape[0], 1, 1)) * residual  # same shape as action_vel

@@ -1,6 +1,7 @@
 import sys
 import os
 import subprocess
+import time as time_lib
 
 sys.path.append("./")
 sys.path.append(f"./policy")
@@ -320,7 +321,7 @@ def eval_policy(task_name,
             vlm_client=vlm_client,
             save_dir=os.path.join(log_dir, "vlm_steering"),
             camera_name="head_camera",
-            prompt_template_path=vlm_prompt_path, # TODO: Check if specific template needed
+            prompt_template_path=vlm_prompt_path,
             traj_std_perturb=0.0
         )
         print(f"Initialized PivotSteerer with VLM server: {vlm_server_url}")
@@ -331,7 +332,7 @@ def eval_policy(task_name,
             vlm_client=vlm_client,
             save_dir=os.path.join(log_dir, "primitive_steering"),
             camera_name="head_camera",
-            prompt_template_path=None, # TODO: Add primitive prompt path
+            prompt_template_path=None,
             horizon_steps=horizon_steps,
             nudge_distance=0.1
         )
@@ -457,8 +458,10 @@ def eval_policy(task_name,
                 # model.get_action supports num_samples (returns [num_samples, horizon, dim])
                 with torch.inference_mode():
                     print("Generating Action Samples")
+                    start_time = time_lib.perf_counter()
                     action_samples = model.get_action(num_samples=num_mmd_samples)
-                    print("Finished Generating Action Samples")
+                    end_time = time_lib.perf_counter()
+                    print(f"Finished Generating Action Samples in {end_time - start_time:.4f} seconds")
                     
                     # Ensure tensor for calculation (get_action likely returns tensor or numpy)
                     if isinstance(action_samples, np.ndarray):
@@ -501,8 +504,8 @@ def eval_policy(task_name,
                         action_samples_np = action_samples.cpu().numpy()
                         
                         if pivot_steerer:
-                            selected_idx, _ = pivot_steerer.select_trajectory(
-                                env=None, # Not used in current implementation
+                            (selected_idx, selected_idx_right), _ = pivot_steerer.select_trajectory(
+                                env=TASK_ENV,
                                 obs=observation,
                                 action_samples=action_samples, # Pass tensor or numpy depending on steerer impl
                                 step_num=cnt_step,
@@ -517,7 +520,7 @@ def eval_policy(task_name,
                             
                         if primitive_steerer:
                             prim_traj, _ = primitive_steerer.select_trajectory(
-                                env=None,
+                                env=TASK_ENV,
                                 obs=observation,
                                 action_samples=action_samples,
                                 step_num=cnt_step,
