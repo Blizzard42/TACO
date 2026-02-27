@@ -21,7 +21,7 @@ tag=debug_pivot
 
 # Steering Parameters:
 compute_mmd=True
-num_mmd_samples=10
+num_mmd_samples=100
 mmd_gamma=10.0
 use_pivot_steering=True
 use_primitive_steering=False
@@ -33,7 +33,7 @@ vlm_prompt_path="/nethome/gpatlin3/flash/TACO/third_party/Robotwin/steering/prom
 # output dir is "./third_party/Robotwin/eval_result/{tag}"
 
 PYTHONWARNINGS=ignore::UserWarning \
-python script/eval_lerobot_torch_pi05.py \
+TORCH_COMPILE_DISABLE=1 python script/eval_lerobot_torch_pi05.py \
     --config policy/$policy_name/deploy_policy.yml \
     --overrides \
     --task_name ${task_name} \

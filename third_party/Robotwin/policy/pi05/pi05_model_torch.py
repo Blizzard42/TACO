@@ -123,8 +123,8 @@ class Lerobot_torch_PI05:
             
             inputs = self.preprocessor(inputs)
             actions = self.policy.predict_action_chunk(inputs, num_samples=num_samples, guidance_actions=guidance_actions, guidance_scale=guidance_scale, gripper_guidance=gripper_guidance)
-            if actions.dim() == 4:
-                actions_un = [self.postprocessor(actions[i])[0].to(torch.float32).cpu().numpy() for i in range(num_samples)]
+            if actions.shape[0] > 1:
+                actions_un = [self.postprocessor(actions[i]).to(torch.float32).cpu().numpy() for i in range(num_samples)]
                 return np.array(actions_un)
             else:
                 actions_un = self.postprocessor(actions)

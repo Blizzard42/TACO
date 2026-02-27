@@ -290,13 +290,13 @@ class PivotSteerer:
                 #             cv2.polylines(img, [pts], True, traj_color, self.line_thickness)
             
         # Add legend with color names
-        color_names = ["Red", "Orange", "Blue", "Cyan", "Magenta"]
-        legend_y = 30
-        for i, color in enumerate(predefined_colors[:num_trajectories]):
-            cv2.circle(img, (30, legend_y), 2, color, -1)
-            cv2.putText(img, color_names[i], (45, legend_y + 5),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.25, (255, 255, 255), 2)
-            legend_y += 25
+        # color_names = ["Red", "Orange", "Blue", "Cyan", "Magenta"]
+        # legend_y = 30
+        # for i, color in enumerate(predefined_colors[:num_trajectories]):
+        #     cv2.circle(img, (30, legend_y), 2, color, -1)
+        #     cv2.putText(img, color_names[i], (45, legend_y + 5),
+        #             cv2.FONT_HERSHEY_SIMPLEX, 0.25, (41, 19, 6), 2)
+        #     legend_y += 25
         
         return img, (selected_indices_left, selected_indices_right)
 
@@ -340,7 +340,7 @@ class PivotSteerer:
         # Add MMD score to image
         text = f"MMD Score: {mmd_score:.6f}"
         cv2.putText(annotated_img_bgr, text, (10, annotated_img_bgr.shape[0] - 20),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (41, 19, 6), 2)
         
         # Convert to PIL Image for VLM
         annotated_img_rgb = cv2.cvtColor(annotated_img_bgr, cv2.COLOR_BGR2RGB)
@@ -572,7 +572,7 @@ class PrimitiveSteerer:
             # Text
             text = f"{c_name}: {name}"
             cv2.putText(img, text, (legend_x + text_offset_x + 5, current_y),
-                       cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), 1)
+                       cv2.FONT_HERSHEY_SIMPLEX, font_scale, (41, 19, 6), 1)
             current_y += line_spacing
             
         return img
