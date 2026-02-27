@@ -564,6 +564,36 @@ class PI05Pytorch(nn.Module):  # see openpi `PI0Pytorch`
             )
         return func(*args, **kwargs)
 
+    def _expand_kv_cache(self, past_key_values, num_samples: int):
+        """Expand a bsize=1 KV cache to bsize=num_samples via zero-copy tensor views.
+
+        Handles both the modern Cache-object format (DynamicCache, with .key_cache /
+        .value_cache list attributes) and the legacy tuple-of-tuples format
+        ((k0, v0), (k1, v1), ...) used by older HuggingFace versions.
+        """
+        if past_key_values is None:
+            return None
+
+        # Cache object (DynamicCache and subclasses): has .key_cache / .value_cache lists
+        if hasattr(past_key_values, "key_cache"):
+            # Clone the object without re-running __init__, then override the tensor lists.
+            # This preserves all other attributes (e.g. _seen_tokens, _cache_position).
+            new_cache = past_key_values.__class__.__new__(past_key_values.__class__)
+            new_cache.__dict__.update(past_key_values.__dict__)
+            new_cache.key_cache = [
+                k.expand(num_samples, -1, -1, -1) for k in past_key_values.key_cache
+            ]
+            new_cache.value_cache = [
+                v.expand(num_samples, -1, -1, -1) for v in past_key_values.value_cache
+            ]
+            return new_cache
+
+        # Legacy tuple-of-tuples format: ((k0, v0), (k1, v1), ...)
+        return tuple(
+            (k.expand(num_samples, -1, -1, -1), v.expand(num_samples, -1, -1, -1))
+            for k, v in past_key_values
+        )
+
     def _prepare_attention_masks_4d(self, att_2d_masks):
         """Helper method to prepare 4D attention masks for transformer."""
         att_2d_masks_4d = att_2d_masks[:, None, :, :]
@@ -772,56 +802,77 @@ class PI05Pytorch(nn.Module):  # see openpi `PI0Pytorch`
         dt = -1.0 / num_steps
         dt = torch.tensor(dt, dtype=torch.float32, device=device)
 
-        # Sample multiple action trajectories if num_samples > 1
-        all_actions = []
-        for sample_idx in range(num_samples):
+        if num_samples == 1:
+            # ── Single-sample path (original behaviour, bsize unchanged) ──────────
             if noise is None:
-                # Sample noise with padded dimension as expected by action_in_proj
-                actions_shape = (
-                    bsize,
-                    self.config.chunk_size,
-                    self.config.max_action_dim,
-                )  # Use config max_action_dim for internal processing
+                actions_shape = (bsize, self.config.chunk_size, self.config.max_action_dim)
                 noise = self.sample_noise(actions_shape, device)
             x_t = noise
             time = torch.tensor(1.0, dtype=torch.float32, device=device)
             while time >= -dt / 2:
                 expanded_time = time.expand(bsize)
-                v_t = self.denoise_step(
-                    prefix_pad_masks,
-                    past_key_values,
-                    x_t,
-                    expanded_time,
-                )
-                # Apply Reconstruction Guidance
+                v_t = self.denoise_step(prefix_pad_masks, past_key_values, x_t, expanded_time)
                 if use_guidance:
-                    # Everything in original dtype (bfloat16) is fine for this
-                    clean_x_t_hat = x_t + (1.0 - expanded_time.reshape(expanded_time.shape[0], 1, 1)) * v_t   # Line 26 of Alg 1 of RTC paper: https://arxiv.org/pdf/2506.07339
-                    residual = (clean_x_t_hat - guidance_actions) # [bsz, H, A]
-
-                    # Analytic gradient: dL/dv = (1 - t) * residual
-                    grad_vel = (1.0 - expanded_time.reshape(expanded_time.shape[0], 1, 1)) * residual  # same shape as action_vel
-                    
-                    # # Disable guidance on the last action dimension (e.g., gripper)
+                    # Line 26 of Alg 1 of RTC paper: https://arxiv.org/pdf/2506.07339
+                    clean_x_t_hat = x_t + (1.0 - expanded_time.reshape(bsize, 1, 1)) * v_t
+                    residual = clean_x_t_hat - guidance_actions  # [bsize, H, A]
+                    grad_vel = (1.0 - expanded_time.reshape(bsize, 1, 1)) * residual
                     if not gripper_guidance:
-                        grad_vel[..., -1] = 0.0 # Disable right gripper guidance
-                        grad_vel[..., 6] = 0.0 # Disable left gripper guidance
-                    
-                    # Apply guidance
-                    v_t = v_t - guidance_scale * grad_vel  
+                        grad_vel[..., -1] = 0.0  # right gripper
+                        grad_vel[..., 6] = 0.0   # left gripper
+                    v_t = v_t - guidance_scale * grad_vel
                 x_t = x_t + dt * v_t
                 time += dt
-            all_actions.append(x_t)
-        
-        # Stack all samples: [num_samples, batch_size, horizon_steps, action_dim]
-        all_actions = torch.stack(all_actions, dim=0)
-        
-        # If only 1 sample, return original shape [batch_size, horizon_steps, action_dim]
-        if num_samples == 1:
-            return all_actions[0]
+            # Return [bsize, chunk_size, action_dim]
+            return x_t
+
         else:
-            # Return [num_samples, batch_size, horizon_steps, action_dim]
-            return all_actions
+            # ── Multi-sample batched path ─────────────────────────────────────────
+            # Build KV cache once (bsize=1) then expand it as a zero-copy view to
+            # bsize=num_samples so all samples share the same prefix encoding.
+            assert bsize == 1, (
+                f"Batched KV-cache expansion requires a single observation (bsize=1), "
+                f"got bsize={bsize}. Pass a single observation and use num_samples for diversity."
+            )
+
+            # Sample all noise at once: [num_samples, chunk_size, action_dim]
+            if noise is None:
+                actions_shape = (num_samples, self.config.chunk_size, self.config.max_action_dim)
+                noise = self.sample_noise(actions_shape, device)
+            x_t = noise  # [num_samples, chunk_size, action_dim]
+
+            # Expand KV cache and prefix masks from bsize=1 to num_samples (zero-copy views)
+            expanded_past_kv = self._expand_kv_cache(past_key_values, num_samples)
+            expanded_prefix_pad_masks = prefix_pad_masks.expand(num_samples, -1)
+
+            # Broadcast guidance to all samples if provided: [num_samples, H, A]
+            if use_guidance and guidance_actions is not None:
+                ga = guidance_actions
+                if ga.dim() == 2:
+                    ga = ga.unsqueeze(0)
+                ga = ga.expand(num_samples, -1, -1)
+            else:
+                ga = None
+
+            # Single batched denoising pass over all num_samples simultaneously
+            time = torch.tensor(1.0, dtype=torch.float32, device=device)
+            while time >= -dt / 2:
+                expanded_time = time.expand(num_samples)
+                v_t = self.denoise_step(expanded_prefix_pad_masks, expanded_past_kv, x_t, expanded_time)
+                if ga is not None:
+                    clean_x_t_hat = x_t + (1.0 - expanded_time.reshape(num_samples, 1, 1)) * v_t
+                    residual = clean_x_t_hat - ga
+                    grad_vel = (1.0 - expanded_time.reshape(num_samples, 1, 1)) * residual
+                    if not gripper_guidance:
+                        grad_vel[..., -1] = 0.0  # right gripper
+                        grad_vel[..., 6] = 0.0   # left gripper
+                    v_t = v_t - guidance_scale * grad_vel
+                x_t = x_t + dt * v_t
+                time += dt
+
+            # Return [num_samples, bsize=1, chunk_size, action_dim] to match the
+            # downstream shape check (actions.dim() == 4) in predict_action_chunk / get_action.
+            return x_t.unsqueeze(1)
 
     @torch.no_grad()  # see openpi `sample_actions` (slightly adapted)
     def sample_actions_and_get_feature(self, images, img_masks, tokens, masks, noise=None, num_steps=None) -> Tensor:
