@@ -331,11 +331,12 @@ def eval_policy(task_name,
             vlm_client=vlm_client,
             save_dir=os.path.join(log_dir, "primitive_steering"),
             camera_name="head_camera",
-            prompt_template_path=None, # TODO: Add primitive prompt path
+            prompt_template_path=vlm_prompt_path,
             horizon_steps=horizon_steps,
-            nudge_distance=0.1
+            nudge_distance=0.05,
+            arm_tag="both"
         )
-        print(f"Initialized PrimitiveSteerer with VLM server: {vlm_server_url}")
+        print(f"Initialized PrimitiveSteerer (qpos mode) with VLM server: {vlm_server_url}")
 
     # ==========================================================
 
@@ -480,7 +481,7 @@ def eval_policy(task_name,
                     mmd_score = compute_temporal_error(
                         curr_actions_t,
                         prev_actions_t,
-                        exec_horizon=act_steps, # Use act_steps as exec horizon
+                        exec_horizon=act_steps if act_steps != horizon_steps else act_steps // 2, # Use act_steps as exec horizon
                         gamma=gamma_val
                     )[0]
                     
@@ -515,7 +516,7 @@ def eval_policy(task_name,
                             
                         if primitive_steerer:
                             prim_traj, _ = primitive_steerer.select_trajectory(
-                                env=None,
+                                env=TASK_ENV,
                                 obs=observation,
                                 action_samples=action_samples,
                                 step_num=cnt_step,
@@ -523,7 +524,7 @@ def eval_policy(task_name,
                                 mmd_score=mmd_score,
                                 task_description=instruction
                             )
-                            # Convert primitive numpy to tensor
+                            # Convert primitive numpy to tensor (already 14-dim qpos in qpos mode)
                             prim_traj_t = torch.from_numpy(prim_traj).to(action_samples.device)
                             guidance_traj_list.append(prim_traj_t)
 
@@ -599,15 +600,25 @@ def eval_policy(task_name,
 
             for i, action in enumerate(actions[:exec_steps]):
                 TASK_ENV.take_action(action)
-                breakpoint()
-                
-                # We need to update observation window for every step in the chunk 
+
+                # We need to update observation window for every step in the chunk
                 # (except the very last one where we loop back to top)
                 if i < exec_steps - 1:
                     observation = TASK_ENV.get_obs()
                     input_rgb_arr, input_state = encode_obs(observation)
                     model.update_observation_window(input_rgb_arr, input_state)
-            
+
+                # Mid-chunk prediction: when act_steps == horizon_steps, sample at the midpoint
+                # so the next MMD comparison uses only the second half of the horizon
+                if compute_mmd and act_steps == horizon_steps and i == act_steps // 2:
+                    with torch.inference_mode():
+                        mid_action_samples = model.get_action(num_samples=num_mmd_samples)
+                        if isinstance(mid_action_samples, np.ndarray):
+                            mid_action_samples = torch.from_numpy(mid_action_samples)
+                        if num_mmd_samples == 1 and mid_action_samples.ndim == 2:
+                            mid_action_samples = mid_action_samples.unsqueeze(0)
+                    prev_action_samples = mid_action_samples
+
             cnt_step += 1 # Increment chunk step counter
 
             # Check success (replacing TASK_ENV.eval_success check inside loop)

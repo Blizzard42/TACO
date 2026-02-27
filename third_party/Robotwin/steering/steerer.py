@@ -10,7 +10,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 import json, re, random
 
 from .vlm_client import VLMClient
-from .utils import project_3d_to_2d, compute_future_ee_poses_using_controller, generate_primitives
+from .utils import project_3d_to_2d, compute_future_ee_poses_using_controller, generate_primitives_qpos
 
 import logging
 log = logging.getLogger(__name__)
@@ -421,11 +421,12 @@ class PrimitiveSteerer:
         line_thickness: int = 1,
         draw_trajectories: bool = False,
         primitive_traj_std_dev: float = 0.0,
-        use_gripper_control: bool = True
+        use_gripper_control: bool = True,
+        arm_tag: str = "both"  # "left", "right", or "both" (only for qpos mode)
     ):
         """
         Initialize the PrimitiveSteerer.
-        
+
         Args:
             vlm_server_url: URL of the VLM server.
             save_dir: Directory to save annotated images and responses.
@@ -433,6 +434,7 @@ class PrimitiveSteerer:
             prompt_template_path: Path to the prompt template file.
             horizon_steps: Number of timesteps to execute the primitive (smoothness).
             nudge_distance: Physical distance in meters for spatial primitives.
+            arm_tag: Which arm(s) to generate primitives for in qpos mode.
         """
         self.vlm_client = vlm_client
         self.save_dir = Path(save_dir) if save_dir else None
@@ -444,11 +446,12 @@ class PrimitiveSteerer:
         self.draw_trajectories = draw_trajectories
         self.primitive_traj_std_dev = primitive_traj_std_dev
         self.use_gripper_control = use_gripper_control
+        self.arm_tag = arm_tag
         
         # Load prompt template from file or default
         if prompt_template_path is None:
             # Default prompt for recovery
-            prompt_template_path = Path(__file__).parent / "vlm_recovery_prompt.txt"
+            prompt_template_path = Path(__file__).parent / "prompts/vlm_recovery_prompt.txt"
             
         # If file doesn't exist, use a hardcoded fallback string to prevent crash
         prompt_template_path = Path(prompt_template_path)
@@ -665,8 +668,10 @@ class PrimitiveSteerer:
         self.step_count = step_num
         
         # 1. Generate Primitives
-        # Returns list of (Horizon, 7) arrays and list of strings
-        primitive_trajs, primitive_names = generate_primitives(obs, self.camera_name, self.nudge_dist, self.horizon_steps)
+        # Returns list of (Horizon, 14) arrays and list of strings
+        primitive_trajs, primitive_names = generate_primitives_qpos(
+            env, obs, self.camera_name, self.nudge_dist, self.horizon_steps, self.arm_tag
+        )
         
         if self.primitive_traj_std_dev > 0.0:
             for i in range(len(primitive_trajs)):
@@ -688,7 +693,7 @@ class PrimitiveSteerer:
             annotated_img_rgb = cv2.cvtColor(annotated_img_bgr, cv2.COLOR_BGR2RGB)
             pil_image = Image.fromarray(annotated_img_rgb)
         else:
-            pil_image = Image.fromarray(obs['image'][self.camera_name]['rgb'].copy())
+            pil_image = Image.fromarray(obs['observation'][self.camera_name]['rgb'].copy())
         
         # Format Prompt
         prompt = self.prompt_template
@@ -733,22 +738,20 @@ class PrimitiveSteerer:
             selected_traj = primitive_trajs[selected_vis_idx]
         
         # Set gripper state
-        if self.use_gripper_control:
-            try:
-                if selected_gripper_state == "open":
-                    selected_traj[:, -1] = 1.0
-                elif selected_gripper_state == "close":
-                    selected_traj[:, -1] = 0.0
-                elif selected_gripper_state == "keep":
-                    selected_traj[:, -1] = env.env.env.env.agent.gripper_closedness
-                else:
-                    raise ValueError(f"Invalid gripper state: {selected_gripper_state}")
-            except Exception as e:
-                log.error(f"Error setting gripper state: {e}")
-                selected_traj[:, -1] = 1.0 if random.random() < 0.5 else 0.0
-        else:
-            # Use the gripper action predicted in the first sampled action plan during MMD computation
-            selected_traj[:, -1] = action_samples[0, 0, :, -1].cpu().to(torch.float16).numpy()
+        # In qpos mode, gripper values are at indices 6 (left) and 13 (right)
+        # They are already set to current values by generate_primitives_qpos
+        # Optionally override with VLM-selected gripper state
+        if self.use_gripper_control and selected_gripper_state is not None:
+            gripper_val = None
+            if selected_gripper_state == "open":
+                gripper_val = 1.0
+            elif selected_gripper_state == "close":
+                gripper_val = 0.0
+            # "keep" leaves them as-is (already set to current values)
+            if gripper_val is not None:
+                left_arm_dim = 6  # TODO: make configurable if needed
+                selected_traj[:, left_arm_dim] = gripper_val          # left gripper
+                selected_traj[:, left_arm_dim + 1 + 6] = gripper_val  # right gripper
         
         # 6. Logging / Saving
         if self.save_dir:
