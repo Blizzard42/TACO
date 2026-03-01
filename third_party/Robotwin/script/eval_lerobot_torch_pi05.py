@@ -457,11 +457,7 @@ def eval_policy(task_name,
                 # 1. Sample actions for MMD
                 # model.get_action supports num_samples (returns [num_samples, horizon, dim])
                 with torch.inference_mode():
-                    print("Generating Action Samples")
-                    start_time = time_lib.perf_counter()
                     action_samples = model.get_action(num_samples=num_mmd_samples)
-                    end_time = time_lib.perf_counter()
-                    print(f"Finished Generating Action Samples in {end_time - start_time:.4f} seconds")
                     
                     # Ensure tensor for calculation (get_action likely returns tensor or numpy)
                     if isinstance(action_samples, np.ndarray):
@@ -473,8 +469,8 @@ def eval_policy(task_name,
                 # 2. Compute MMD
                 if prev_action_samples is not None:
                     # Reshape for compute_temporal_error: [num_envs=1, num_samples, horizon, dim]
-                    curr_actions_t = action_samples.unsqueeze(0).transpose(1, 0)
-                    prev_actions_t = prev_action_samples.unsqueeze(0).transpose(1, 0)
+                    curr_actions_t = action_samples.unsqueeze(0)
+                    prev_actions_t = prev_action_samples.unsqueeze(0)
                     
                     # Handle Gamma string/float conversion
                     gamma_val = mmd_gamma
@@ -568,7 +564,6 @@ def eval_policy(task_name,
                 
                 # Visualization (Optional if MMD computed)
                 if compute_mmd:
-                    print("Attempting Visualization of Trajectory Rollout")
                     # Create directory
                     episode_rollout_dir = os.path.join(log_dir, "rollout_img", f"episode_{TASK_ENV.test_num}")
                     os.makedirs(episode_rollout_dir, exist_ok=True)

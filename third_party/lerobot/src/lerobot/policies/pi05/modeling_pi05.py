@@ -13,7 +13,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import time as time_lib
 import copy
 
 import builtins
@@ -763,8 +762,6 @@ class PI05Pytorch(nn.Module):  # see openpi `PI0Pytorch`
         prefix_att_2d_masks_4d = self._prepare_attention_masks_4d(prefix_att_2d_masks)
         self.paligemma_with_expert.paligemma.language_model.config._attn_implementation = "eager"  # noqa: SLF001
 
-        print("Begin Paligemma Forward")
-        start_time = time_lib.perf_counter()
         _, past_key_values = self.paligemma_with_expert.forward(
             attention_mask=prefix_att_2d_masks_4d,
             position_ids=prefix_position_ids,
@@ -772,14 +769,11 @@ class PI05Pytorch(nn.Module):  # see openpi `PI0Pytorch`
             inputs_embeds=[prefix_embs, None],
             use_cache=True,
         )
-        end_time = time_lib.perf_counter()
-        print(f"Paligemma Forward Time: {end_time - start_time:.4f} seconds")
 
         dt = -1.0 / num_steps
         dt = torch.tensor(dt, dtype=torch.float32, device=device)
 
         # Sample multiple action trajectories if num_samples > 1
-        total_times = [0.0, 0.0]
         if noise is None:
             # Sample noise with padded dimension as expected by action_in_proj
             actions_shape = (
@@ -790,7 +784,6 @@ class PI05Pytorch(nn.Module):  # see openpi `PI0Pytorch`
             noise = self.sample_noise(actions_shape, device)
         x_t = noise
         time = torch.tensor(1.0, dtype=torch.float32, device=device)
-        starting_while_loop_time = time_lib.perf_counter()
         if prefix_pad_masks.shape[0] == 1 and bsize > 1:
             # .expand() creates a view without copying memory
             prefix_pad_masks = prefix_pad_masks.expand(bsize, *prefix_pad_masks.shape[1:])
@@ -810,14 +803,12 @@ class PI05Pytorch(nn.Module):  # see openpi `PI0Pytorch`
                 past_key_values = expanded_cache
         while time >= -dt / 2:
             expanded_time = time.expand(bsize)
-            starting_denoising_time = time_lib.perf_counter()
             v_t = self.denoise_step(
                 prefix_pad_masks,
                 past_key_values,
                 x_t,
                 expanded_time,
             )
-            total_times[1] += time_lib.perf_counter() - starting_denoising_time
             # Apply Reconstruction Guidance
             if use_guidance:
                 # Everything in original dtype (bfloat16) is fine for this
@@ -836,8 +827,6 @@ class PI05Pytorch(nn.Module):  # see openpi `PI0Pytorch`
                 v_t = v_t - guidance_scale * grad_vel  
             x_t = x_t + dt * v_t
             time += dt
-        total_times[0] += time_lib.perf_counter() - starting_while_loop_time
-        print("Total Times: ", total_times)
         
         return x_t # [batch_size, horizon_steps, action_dim]
 

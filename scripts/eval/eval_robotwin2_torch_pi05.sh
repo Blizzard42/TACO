@@ -23,6 +23,7 @@ tag=debug_pivot
 compute_mmd=True
 num_mmd_samples=100
 mmd_gamma=10.0
+mmd_threshold=0.4
 use_pivot_steering=True
 use_primitive_steering=False
 guidance_scale=1.0
@@ -45,6 +46,7 @@ TORCH_COMPILE_DISABLE=1 python script/eval_lerobot_torch_pi05.py \
     --compute_mmd ${compute_mmd} \
     --num_mmd_samples ${num_mmd_samples} \
     --mmd_gamma ${mmd_gamma} \
+    --mmd_threshold ${mmd_threshold} \
     --use_pivot_steering ${use_pivot_steering} \
     --use_primitive_steering ${use_primitive_steering} \
     --guidance_scale ${guidance_scale} \

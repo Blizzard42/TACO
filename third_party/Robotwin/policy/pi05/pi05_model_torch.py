@@ -14,6 +14,7 @@ from lerobot.policies.pi05 import PI05Policy
 
 from lerobot.policies.factory import make_pre_post_processors
 from lerobot.configs.policies import PreTrainedConfig
+from lerobot.processor.core import TransitionKey
 
 from cfn.cfn_net import CFN
 
@@ -101,11 +102,20 @@ class Lerobot_torch_PI05:
     def get_action(
             self,
             num_samples: int = 1,
-            guidance_actions: torch.FloatTensor = None,
+            guidance_actions: torch.Tensor = None,
             guidance_scale: float = 1.0,
             gripper_guidance: bool = True,
         ):
         assert (self.observation_window is not None), "update observation_window first!"
+        if guidance_actions is not None:
+            if guidance_actions.dim() == 2:
+                guidance_actions = guidance_actions.unsqueeze(0)
+            processed_actions = []
+            for i in range(guidance_actions.shape[0]):
+                step_input = {TransitionKey.ACTION: guidance_actions[i]}
+                result = self.preprocessor.steps[2](step_input)
+                processed_actions.append(result['action'])
+            guidance_actions = torch.stack(processed_actions).to(self.policy.config.device)
         with torch.no_grad():
             inputs = {k: v.to(self.policy.config.device) if isinstance(v, torch.Tensor) else v for k, v in self.observation_window.items()}
                     
