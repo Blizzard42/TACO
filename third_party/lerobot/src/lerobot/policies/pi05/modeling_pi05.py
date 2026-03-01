@@ -811,20 +811,22 @@ class PI05Pytorch(nn.Module):  # see openpi `PI0Pytorch`
             )
             # Apply Reconstruction Guidance
             if use_guidance:
-                # Everything in original dtype (bfloat16) is fine for this
-                clean_x_t_hat = x_t + (1.0 - expanded_time.reshape(expanded_time.shape[0], 1, 1)) * v_t   # Line 26 of Alg 1 of RTC paper: https://arxiv.org/pdf/2506.07339
+                # pi05 convention: x_t = t*noise + (1-t)*data, v_t = noise - data, t: 1→0
+                # Clean estimate: x_t - t*v_t  (maps from working model's x_t + (1-t)*v_t via t_pi05=1-t_work, v_pi05=-v_work)
+                t_coef = expanded_time.reshape(expanded_time.shape[0], 1, 1)
+                clean_x_t_hat = x_t - t_coef * v_t
                 residual = F.pad(clean_x_t_hat[..., :guidance_actions.shape[-1]] - guidance_actions, (0, 18), mode="constant", value=0.0) # [bsz, H, A]
 
-                # Analytic gradient: dL/dv = (1 - t) * residual
-                grad_vel = (1.0 - expanded_time.reshape(expanded_time.shape[0], 1, 1)) * residual  # same shape as action_vel
-                
-                # # Disable guidance on the last action dimension (e.g., gripper)
+                # Analytic gradient: dL/dv_t = -t * residual  (v_t sign flip gives negative of working model's (1-t)*residual)
+                grad_vel = -t_coef * residual  # same shape as action_vel
+
+                # Disable guidance on the last action dimension (e.g., gripper)
                 if not gripper_guidance:
                     grad_vel[..., -1] = 0.0 # Disable right gripper guidance
                     grad_vel[..., 6] = 0.0 # Disable left gripper guidance
-                
-                # Apply guidance
-                v_t = v_t - guidance_scale * grad_vel  
+
+                # Apply guidance: v_t = v_t - scale * (-t * residual) = v_t + scale * t * residual
+                v_t = v_t - guidance_scale * grad_vel
             x_t = x_t + dt * v_t
             time += dt
         
