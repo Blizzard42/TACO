@@ -365,50 +365,136 @@ def visualize_trajectory_on_cameras(env, obs, env_actions_list, mmd_mode=False, 
     return annotated_images
 
 
-def generate_primitives(obs: Dict,
-                         camera_name: str,
-                         nudge_distance: float,
-                         horizon_steps: int) -> Tuple[List[np.ndarray], List[str]]:
+def generate_primitives_qpos(
+    env,
+    obs: Dict,
+    camera_name: str,
+    nudge_distance: float,
+    horizon_steps: int,
+    arm_tag: str = "both"
+) -> Tuple[List[np.ndarray], List[str]]:
     """
-    Generates physical trajectory arrays for hardcoded primitives.
-    UPDATED: Vectors inverted to match visual evidence from user environment.
-    """
-    cam_params = obs['camera_param'][camera_name]
-    
-    # Get Camera-to-World Rotation
-    extrinsic = cam_params.get('extrinsic_cv', cam_params.get('extrinsic'))
-    if extrinsic is None:
-        raise ValueError(f"Could not find extrinsic for {camera_name}")
+    Generate 14-dim qpos action primitives for the bimanual ALOHA robot.
 
-    # extrinsic is W2C. We need Rotation C2W.
+    Computes Cartesian displacement primitives (left, right, up, down, forward, retreat),
+    converts them to target EE poses, then uses IK to get joint-space trajectories.
+
+    Args:
+        env: TASK_ENV (Base_Task instance) with robot and planner access.
+        obs: Current observation dict from env.get_obs().
+        camera_name: Camera name for determining frame-relative directions.
+        nudge_distance: Displacement magnitude in meters (e.g., 0.05).
+        horizon_steps: Number of timesteps for the trajectory.
+        arm_tag: "left", "right", or "both" - which arm(s) to generate primitives for.
+
+    Returns:
+        Tuple of (trajectories, names):
+            trajectories: List of (horizon_steps, 14) numpy arrays in qpos format.
+            names: List of primitive names (e.g., "Nudge Left").
+    """
+    # Get camera extrinsic for frame-relative directions
+    cam_params = obs['observation'][camera_name]
+    extrinsic = cam_params.get('extrinsic_cv')
+    if extrinsic is None:
+        raise ValueError(f"Could not find extrinsic_cv for {camera_name}")
+
+    # extrinsic is W2C. We need C2W rotation.
     R_c2w = extrinsic[:3, :3].T
-    
-    # Define Vectors in Camera Frame
-    # Based on your image, the previous axes were inverted.
-    vecs = {
-        "Nudge Left":     np.array([1, 0, 0]),   # Flipped from -1
-        "Nudge Right":    np.array([-1, 0, 0]),  # Flipped from 1
-        "Nudge Up":       np.array([0, 0, -1]),   # Flipped from -1
-        "Nudge Down":     np.array([0, 0, 1]),  # Flipped from 1
-        "Nudge Forward":  np.array([0, 6, 0]),  # Flipped (Push into scene/Up screen)
-        "Retreat":        np.array([0, -1, 0])  # Flipped (Pull back/Down screen)
+
+    # Direction vectors in camera frame (standard OpenCV: X=right, Y=down, Z=forward).
+    # Down and Forward have small off-axis components to avoid pushing the EE into
+    # extreme poses (table collision / workspace boundary) that cause IK failure.
+    direction_vecs = {
+        "Nudge Left":     np.array([-1, 0, 0]),
+        "Nudge Right":    np.array([1, 0, 0]),
+        "Nudge Up":       np.array([0, -1, 0]),
+        "Nudge Down":     np.array([0, 0.8, -0.2]),
+        "Nudge Forward":  np.array([0, 0, 1]),
+        "Retreat":        np.array([0, 0, -1]),
     }
-    
+
+    # Get current state
+    current_state = obs["joint_action"]["vector"]  # 14-dim
+    left_arm_dim = len(obs["joint_action"]["left_arm"])   # 6
+    right_arm_dim = len(obs["joint_action"]["right_arm"]) # 6
+
+    current_left_joints = current_state[:left_arm_dim]
+    current_left_gripper = current_state[left_arm_dim]
+    current_right_joints = current_state[left_arm_dim + 1:left_arm_dim + 1 + right_arm_dim]
+    current_right_gripper = current_state[left_arm_dim + 1 + right_arm_dim]
+
+    # Get current EE poses
+    current_left_ee = np.array(env.robot.get_left_ee_pose(), dtype=np.float64)
+    current_right_ee = np.array(env.robot.get_right_ee_pose(), dtype=np.float64)
+
     trajectories = []
     names = []
-    
-    for name, vec in vecs.items():
-        # Transform vector to World Frame
-        world_vec = R_c2w @ (vec * nudge_distance)
-        
-        # Distribute delta over horizon steps
-        step_pos = world_vec / horizon_steps
-        
-        traj = np.zeros((horizon_steps, 7))
-        traj[:, :3] = step_pos
-        traj[:, 6] = 1.0 # Keep gripper open/neutral
-        
+
+    for name, cam_vec in direction_vecs.items():
+        # Transform direction to world frame
+        world_displacement = R_c2w @ (cam_vec * nudge_distance)
+
+        # Compute target EE poses
+        target_left_ee = current_left_ee.copy()
+        target_right_ee = current_right_ee.copy()
+
+        target_left_joints = current_left_joints.copy()
+        target_right_joints = current_right_joints.copy()
+
+        ik_success = False
+
+        if arm_tag in ("left", "both"):
+            target_left_ee[:3] += world_displacement
+            try:
+                left_result = env.robot.left_plan_path(target_left_ee.tolist())
+                if left_result["status"] == "Success":
+                    target_left_joints = left_result["position"][-1][:left_arm_dim]
+                    ik_success = True
+                else:
+                    print(f"IK failed for left arm primitive '{name}': {left_result['status']}")
+                    continue
+            except Exception as e:
+                print(f"IK exception for left arm primitive '{name}': {e}")
+                continue
+
+        if arm_tag in ("right", "both"):
+            target_right_ee[:3] += world_displacement
+            try:
+                right_result = env.robot.right_plan_path(target_right_ee.tolist())
+                if right_result["status"] == "Success":
+                    target_right_joints = right_result["position"][-1][:right_arm_dim]
+                    ik_success = True
+                else:
+                    print(f"IK failed for right arm primitive '{name}': {right_result['status']}")
+                    continue
+            except Exception as e:
+                print(f"IK exception for right arm primitive '{name}': {e}")
+                continue
+
+        if not ik_success:
+            continue
+
+        # Interpolate from current to target over horizon_steps
+        traj = np.zeros((horizon_steps, len(current_state)))  # (horizon_steps, 14)
+
+        for t in range(horizon_steps):
+            alpha = (t + 1) / horizon_steps  # 0 -> 1 linear interpolation
+
+            interp_left = current_left_joints * (1 - alpha) + target_left_joints * alpha
+            interp_right = current_right_joints * (1 - alpha) + target_right_joints * alpha
+
+            traj[t, :left_arm_dim] = interp_left
+            traj[t, left_arm_dim] = current_left_gripper  # keep gripper unchanged
+            traj[t, left_arm_dim + 1:left_arm_dim + 1 + right_arm_dim] = interp_right
+            traj[t, left_arm_dim + 1 + right_arm_dim] = current_right_gripper  # keep gripper unchanged
+
         trajectories.append(traj)
         names.append(name)
-        
+
+    if len(trajectories) == 0:
+        print("All IK solutions failed. Returning no-op primitive.")
+        noop_traj = np.tile(current_state, (horizon_steps, 1))
+        trajectories.append(noop_traj)
+        names.append("Stay")
+
     return trajectories, names
