@@ -335,6 +335,7 @@ def eval_policy(task_name,
             prompt_template_path=vlm_prompt_path,
             horizon_steps=horizon_steps,
             nudge_distance=0.05,
+            use_gripper_control=False,
             arm_tag="both"
         )
         print(f"Initialized PrimitiveSteerer (qpos mode) with VLM server: {vlm_server_url}")

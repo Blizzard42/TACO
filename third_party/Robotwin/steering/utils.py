@@ -411,6 +411,7 @@ def generate_primitives_qpos(
         "Nudge Down":     np.array([0, 0.8, -0.2]),
         "Nudge Forward":  np.array([0, 0, 1]),
         "Retreat":        np.array([0, 0, -1]),
+        # "None":           np.array([0, 0, 0])
     }
 
     # Get current state

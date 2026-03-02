@@ -17,16 +17,16 @@ policy_path="/nethome/gpatlin3/flash/huggingface/hub/models--rhodes-team-teleai-
 task_config=demo_clean
 seed=1
 task_name=handover_block
-tag=debug_pivot
+tag=debug_primitive
 
 # Steering Parameters:
 compute_mmd=True
 num_mmd_samples=100
 mmd_gamma=10.0
-mmd_threshold=0.4
-use_pivot_steering=True
-use_primitive_steering=False
-guidance_scale=1.0
+mmd_threshold=0.0
+use_pivot_steering=False
+use_primitive_steering=True
+guidance_scale=80.0
 ensemble_weights="[1.0,0.0]" # [pivot_weight, primitive_weight]
 vlm_server_url="http://localhost:8000"
 vlm_model_name="Qwen/Qwen2.5-VL-72B-Instruct"

@@ -580,62 +580,6 @@ class PrimitiveSteerer:
             
         return img
 
-    def _extract_vlm_response(self, response_text: str) -> dict:
-        """
-        Extracts 'chosen_trajectory' and 'gripper_state' from VLM response.
-        Handles standard JSON and Markdown formatting.
-        
-        Args:
-            response_text (str): The raw string returned by the VLM.
-            
-        Returns:
-            dict: {'chosen_trajectory': str, 'gripper_state': str}
-                Values are None if extraction fails.
-        """
-        # Default return structure
-        extracted_data = {
-            "chosen_trajectory": None,
-            "gripper_state": None
-        }
-
-        # 1. Clean up Markdown code blocks (e.g., ```json ... ```)
-        clean_text = response_text.strip()
-        if clean_text.startswith("```json"):
-            clean_text = clean_text[7:]
-        elif clean_text.startswith("```"):
-            clean_text = clean_text[3:]
-        
-        if clean_text.endswith("```"):
-            clean_text = clean_text[:-3]
-        
-        clean_text = clean_text.strip()
-
-        # 2. Attempt strict JSON parsing
-        try:
-            data = json.loads(clean_text)
-            extracted_data["chosen_trajectory"] = data.get("chosen_trajectory")
-            extracted_data["gripper_state"] = data.get("gripper_state")
-            return extracted_data
-        except json.JSONDecodeError:
-            log.warning(f"JSON parse failed for VLM response. Attempting Regex fallback. Response: {response_text[:50]}...")
-
-        # 3. Fallback: Regex extraction
-        # This handles cases where the VLM adds extra text outside the JSON block
-        
-        # Extract chosen_trajectory
-        traj_pattern = r'"chosen_trajectory"\s*:\s*"([^"]+)"'
-        traj_match = re.search(traj_pattern, response_text)
-        if traj_match:
-            extracted_data["chosen_trajectory"] = traj_match.group(1)
-
-        # Extract gripper_state
-        state_pattern = r'"gripper_state"\s*:\s*"([^"]+)"'
-        state_match = re.search(state_pattern, response_text)
-        if state_match:
-            extracted_data["gripper_state"] = state_match.group(1)
-
-        return extracted_data
-
     def select_trajectory(
         self,
         env,
@@ -647,12 +591,12 @@ class PrimitiveSteerer:
         task_description: Optional[str] = None,
     ) -> tuple[np.ndarray, str]:
         """
-        Generate primitives, visualize them, and query VLM to select one.
+        Generate primitives, visualize them, and query VLM to select one for each arm.
         
         Returns:
             tuple: (selected_trajectory_array, vlm_response_text)
             
-            IMPORTANT: The returned trajectory is (Horizon, 7) PHYSICAL DELTAS.
+            IMPORTANT: The returned trajectory is (Horizon, 14) PHYSICAL DELTAS.
             The EvalAgent must skip post-processing for this result.
         """
         self.step_count = step_num
@@ -702,46 +646,46 @@ class PrimitiveSteerer:
             prompt = prompt.replace("<PRIMITIVE_LIST/>", prim_list_str)
         
         # 4. Query VLM
-        # We use select_trajectory method from client, but since we need specific
-        # primitive mapping, we might need 'generate' or assume select_trajectory 
-        # returns an index 0-N matching the list.
-        # Assuming vlm_client.select_trajectory returns (index, text)
-        _, vlm_response = self.vlm_client.select_trajectory(
+        primitives, vlm_response = self.vlm_client.select_primitives(
             pil_image, 
             prompt,
-            num_trajectories=len(primitive_names),
-            primitive=True
+            primitive_names
         )
         
         # 5. Retrieve Selected Action
-        try:
-            extracted_info = self._extract_vlm_response(vlm_response)
-            selected_name = extracted_info["chosen_trajectory"]
-            selected_gripper_state = extracted_info["gripper_state"]
-            selected_vis_idx = primitive_names.index(selected_name)
-            selected_traj = primitive_trajs[selected_vis_idx]
-        except Exception as e:
-            log.error(f"Error extracting Primitive VLM response: {e}")
-            selected_name = primitive_names[random.randint(0, len(primitive_names) - 1)]
-            selected_gripper_state = "open" if random.random() < 0.5 else "close"
-            selected_vis_idx = primitive_names.index(selected_name)
-            selected_traj = primitive_trajs[selected_vis_idx]
+        left_idx = primitives['chosen_primitive_left']
+        right_idx = primitives['chosen_primitive_right']
+        
+        left_traj = primitive_trajs[left_idx]
+        right_traj = primitive_trajs[right_idx]
+        
+        left_gripper = primitives['gripper_state_left']
+        right_gripper = primitives['gripper_state_right']
+        
+        left_arm_dim = 6  # TODO: make configurable if needed
+        right_arm_dim = 6
+
+        # Initialize the merged trajectory array
+        selected_traj = np.zeros_like(left_traj)
+        
+        # Splice the trajectories together
+        # Left arm joints
+        selected_traj[:, :left_arm_dim] = left_traj[:, :left_arm_dim]
+        # Right arm joints
+        selected_traj[:, left_arm_dim + 1 : left_arm_dim + 1 + right_arm_dim] = right_traj[:, left_arm_dim + 1 : left_arm_dim + 1 + right_arm_dim]
         
         # Set gripper state
         # In qpos mode, gripper values are at indices 6 (left) and 13 (right)
-        # They are already set to current values by generate_primitives_qpos
-        # Optionally override with VLM-selected gripper state
-        if self.use_gripper_control and selected_gripper_state is not None:
-            gripper_val = None
-            if selected_gripper_state == "open":
-                gripper_val = 1.0
-            elif selected_gripper_state == "close":
-                gripper_val = 0.0
-            # "keep" leaves them as-is (already set to current values)
-            if gripper_val is not None:
-                left_arm_dim = 6  # TODO: make configurable if needed
-                selected_traj[:, left_arm_dim] = gripper_val          # left gripper
-                selected_traj[:, left_arm_dim + 1 + 6] = gripper_val  # right gripper
+        if self.use_gripper_control:
+            selected_traj[:, left_arm_dim] = left_gripper          # left gripper
+            selected_traj[:, left_arm_dim + 1 + right_arm_dim] = right_gripper  # right gripper
+        else:
+            # Fallback to the current values preserved by generate_primitives_qpos
+            selected_traj[:, left_arm_dim] = left_traj[:, left_arm_dim]
+            selected_traj[:, left_arm_dim + 1 + right_arm_dim] = right_traj[:, left_arm_dim + 1 + right_arm_dim]
+        
+        selected_name_left = primitive_names[left_idx]
+        selected_name_right = primitive_names[right_idx]
         
         # 6. Logging / Saving
         if self.save_dir:
@@ -754,13 +698,14 @@ class PrimitiveSteerer:
             with open(response_path, 'w', encoding='utf-8') as f:
                 f.write(f"Step: {step_num}\n")
                 f.write(f"MMD Score: {mmd_score:.6f}\n")
-                f.write(f"Selected Primitive: {selected_name} (Idx: {selected_vis_idx})\n")
+                f.write(f"Selected Primitive Left: {selected_name_left} (Idx: {left_idx})\n")
+                f.write(f"Selected Primitive Right: {selected_name_right} (Idx: {right_idx})\n")
                 f.write(f"Prompt used:\n{prompt}\n\n")
                 f.write("VLM Response:\n")
                 f.write(vlm_response)
             
             log.info(f"Saved primitive visualization to {img_save_path}")
 
-        log.info(f"VLM Primitive Selection: {selected_name} (Idx: {selected_vis_idx})")
+        log.info(f"VLM Primitive Selection - Left: {selected_name_left} ({left_idx}), Right: {selected_name_right} ({right_idx})")
         
         return selected_traj, vlm_response
