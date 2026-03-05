@@ -240,7 +240,7 @@ def main(usr_args):
 
     st_seed = 100000 * (1 + seed)
     suc_nums = []
-    test_num = 100
+    test_num = usr_args.get("test_num", 100)
     topk = 1
 
     ckpt_dir = policy_path
@@ -303,7 +303,8 @@ def eval_policy(task_name,
     vlm_server_url = usr_args.get("vlm_server_url", "")
     vlm_model_name = usr_args.get("vlm_model_name", "Qwen/Qwen2.5-VL-72B-Instruct")
     # TODO: Add specific prompt paths or use defaults
-    vlm_prompt_path = usr_args.get("vlm_prompt_path", None) 
+    pivot_prompt_path = usr_args.get("pivot_prompt_path", None)
+    primitive_prompt_path = usr_args.get("primitive_prompt_path", None) 
     
     log_dir = usr_args.get("log_dir", "./eval_result")
     
@@ -321,7 +322,7 @@ def eval_policy(task_name,
             vlm_client=vlm_client,
             save_dir=os.path.join(log_dir, "vlm_steering"),
             camera_name="head_camera",
-            prompt_template_path=vlm_prompt_path,
+            prompt_template_path=pivot_prompt_path,
             traj_std_perturb=0.0
         )
         print(f"Initialized PivotSteerer with VLM server: {vlm_server_url}")
@@ -332,7 +333,7 @@ def eval_policy(task_name,
             vlm_client=vlm_client,
             save_dir=os.path.join(log_dir, "primitive_steering"),
             camera_name="head_camera",
-            prompt_template_path=vlm_prompt_path,
+            prompt_template_path=primitive_prompt_path,
             horizon_steps=horizon_steps,
             nudge_distance=0.05,
             use_gripper_control=False,
@@ -446,6 +447,7 @@ def eval_policy(task_name,
         cnt_step = 0 # Step counter for MMD logging (corresponds to chunks)
 
         while TASK_ENV.take_action_cnt < TASK_ENV.step_lim:
+            start_while_time = time_lib.time()
             observation = TASK_ENV.get_obs()
             
             # Replaces: input_rgb_arr, input_state = encode_obs(observation)
@@ -552,7 +554,7 @@ def eval_policy(task_name,
                                     num_samples=1,
                                     guidance_actions=final_guidance,
                                     guidance_scale=guidance_scale,
-                                    gripper_guidance=True
+                                    gripper_guidance=False
                                 )
                                 # Ensure actions is [horizon, dim]
                                 if actions.ndim == 3: actions = actions.squeeze(0)
@@ -595,17 +597,16 @@ def eval_policy(task_name,
 
             # Execute Action Chunk
             # model.pi0_step usually defines execution horizon (e.g. 10 or 50)
-            exec_steps = 25 # model.pi0_step
             # Handle if actions is tensor
             if isinstance(actions, torch.Tensor):
                 actions = actions.cpu().numpy()
 
-            for i, action in enumerate(actions[:exec_steps]):
+            for i, action in enumerate(actions[:act_steps]):
                 TASK_ENV.take_action(action)
 
                 # We need to update observation window for every step in the chunk
                 # (except the very last one where we loop back to top)
-                if i < exec_steps - 1:
+                if i < act_steps - 1:
                     observation = TASK_ENV.get_obs()
                     input_rgb_arr, input_state = encode_obs(observation)
                     model.update_observation_window(input_rgb_arr, input_state)
@@ -627,6 +628,7 @@ def eval_policy(task_name,
             if TASK_ENV.eval_success:
                 succ = True
                 break
+            print("Full loop took {:.2f}s".format(time_lib.time() - start_while_time))
         
         # ---- Evaluation Loop End ----
 

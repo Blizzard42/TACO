@@ -681,8 +681,9 @@ class PrimitiveSteerer:
             selected_traj[:, left_arm_dim + 1 + right_arm_dim] = right_gripper  # right gripper
         else:
             # Fallback to the current values preserved by generate_primitives_qpos
-            selected_traj[:, left_arm_dim] = left_traj[:, left_arm_dim]
-            selected_traj[:, left_arm_dim + 1 + right_arm_dim] = right_traj[:, left_arm_dim + 1 + right_arm_dim]
+            # TODO: Pull in current gripper state from base policy gipper 
+            selected_traj[:, left_arm_dim] = action_samples[0, :, left_arm_dim]
+            selected_traj[:, left_arm_dim + 1 + right_arm_dim] = action_samples[0, :, left_arm_dim + 1 + right_arm_dim]
         
         selected_name_left = primitive_names[left_idx]
         selected_name_right = primitive_names[right_idx]

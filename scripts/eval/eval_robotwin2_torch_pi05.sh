@@ -16,25 +16,27 @@ policy_name=pi05
 policy_path="/nethome/gpatlin3/flash/huggingface/hub/models--rhodes-team-teleai--pi05_TACO_robotwin2_finetuned/snapshots/0f000e2748bd1fcb43027d8790f81fcccaa04670/"
 task_config=demo_clean
 seed=1
-task_name=handover_block
-tag=debug_primitive
+task_name=adjust_bottle
+tag="debug/primitive_g20"
 
 # Steering Parameters:
 compute_mmd=True
-num_mmd_samples=100
-mmd_gamma=10.0
+num_mmd_samples=20
+mmd_gamma="median"
 mmd_threshold=0.0
 use_pivot_steering=False
 use_primitive_steering=True
-guidance_scale=80.0
-ensemble_weights="[1.0,0.0]" # [pivot_weight, primitive_weight]
-vlm_server_url="http://localhost:8000"
+guidance_scale=0.0
+ensemble_weights="[0.5,0.5]" # [pivot_weight, primitive_weight]
+vlm_server_url="http://shakey:43859"
 vlm_model_name="Qwen/Qwen2.5-VL-72B-Instruct"
-vlm_prompt_path="/nethome/gpatlin3/flash/TACO/third_party/Robotwin/steering/prompts/vlm_prompt_template.txt"
+pivot_prompt_path="/nethome/gpatlin3/flash/TACO/third_party/Robotwin/steering/prompts/pivot_template.txt"
+primitive_prompt_path="/nethome/gpatlin3/flash/TACO/third_party/Robotwin/steering/prompts/primitive_template.txt"
+test_num=5
 # output dir is "./third_party/Robotwin/eval_result/{tag}"
 
 PYTHONWARNINGS=ignore::UserWarning \
-TORCH_COMPILE_DISABLE=1 python script/eval_lerobot_torch_pi05.py \
+PYTHONUNBUFFERED=1 TORCH_COMPILE_DISABLE=1 python script/eval_lerobot_torch_pi05.py \
     --config policy/$policy_name/deploy_policy.yml \
     --overrides \
     --task_name ${task_name} \
@@ -53,6 +55,8 @@ TORCH_COMPILE_DISABLE=1 python script/eval_lerobot_torch_pi05.py \
     --ensemble_weights ${ensemble_weights} \
     --vlm_server_url ${vlm_server_url} \
     --vlm_model_name ${vlm_model_name} \
-    --vlm_prompt_path ${vlm_prompt_path} \
+    --pivot_prompt_path ${pivot_prompt_path} \
+    --primitive_prompt_path ${primitive_prompt_path} \
+    --test_num ${test_num} \
     $@
 
