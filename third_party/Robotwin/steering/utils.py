@@ -88,7 +88,7 @@ def compute_temporal_error(
     return np.array(res)
 
 
-def visualize_and_save_trajectory(env, obs, env_actions_list, cnt_step, save_path=None, mmd_mode=False, mmd_score=None, camera_name="overhead_camera"):
+def visualize_and_save_trajectory(env, obs, env_actions_list, cnt_step, save_path=None, mmd_mode=False, mmd_score=None, camera_name="overhead_camera", save=True):
     """
     Convenience function to visualize and optionally save trajectory.
     
@@ -101,6 +101,8 @@ def visualize_and_save_trajectory(env, obs, env_actions_list, cnt_step, save_pat
         save_path: Path to save the visualization
         mmd_mode: If True, visualize all trajectories with different colors
         mmd_score: Optional MMD score to display in the plot
+        camera_name: Name of the camera to visualize
+        save: If True, save the visualization to a file
     """
     import matplotlib.pyplot as plt
     
@@ -128,10 +130,10 @@ def visualize_and_save_trajectory(env, obs, env_actions_list, cnt_step, save_pat
     
     if save_path is None:
         save_path = f'trajectory_step_{cnt_step}.png'
-    plt.savefig(save_path, dpi=150, bbox_inches='tight')
-    plt.close()
-        
-    log.debug(f"Saved trajectory visualization to {save_path}")
+    if save:
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        plt.close()
+        log.debug(f"Saved trajectory visualization to {save_path}")
     
     return annotated_images
         

@@ -1,3 +1,4 @@
+import random
 import sys
 import os
 import subprocess
@@ -144,6 +145,8 @@ def main(usr_args):
     video_save_dir = None
     video_size = None
 
+    save_data = usr_args.get("save_data", False)
+
     tag = usr_args["tag"]
     policy_path = usr_args["policy_path"]
 
@@ -202,7 +205,7 @@ def main(usr_args):
     save_dir = Path(f"eval_result/{tag}/{task_name}/{policy_name}/{task_config}/{ckpt_setting}/{current_time}")
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    if args["eval_video_log"]:
+    if args["eval_video_log"] and save_data:
         video_save_dir = save_dir
         camera_config = get_camera_config(args["camera"]["head_camera_type"])
         video_size = str(camera_config["w"]) + "x" + str(camera_config["h"])
@@ -250,7 +253,18 @@ def main(usr_args):
         ckpt_dir,
     )
 
-    torch.manual_seed(42)
+    random.seed(seed + 42)
+    np.random.seed(seed + 42)
+    torch.manual_seed(seed + 42)
+
+    # CUDA determinism: required for reproducible results across runs and configs.
+    # Without these, cuDNN and cuBLAS use non-deterministic algorithms even with
+    # the same seed (e.g. flash attention, scatter-add reductions).
+    os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"  # required for torch.use_deterministic_algorithms
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    torch.cuda.manual_seed_all(seed + 42)
+    torch.use_deterministic_algorithms(True, warn_only=True)  # warn_only avoids crashes on unsupported ops
 
     st_seed, suc_num = eval_policy(task_name,
                                    TASK_ENV,
@@ -307,9 +321,12 @@ def eval_policy(task_name,
     primitive_prompt_path = usr_args.get("primitive_prompt_path", None) 
     
     log_dir = usr_args.get("log_dir", "./eval_result")
+
+    save_data = usr_args.get("save_data", False)
     
     # Steering constants
-    act_steps = 50
+    act_steps = usr_args.get("act_steps", 15)
+    ema_alpha = usr_args.get("ema_alpha", 0.4)
     horizon_steps = 50 # Assuming this aligns with model cfg
 
     vlm_client = None
@@ -446,6 +463,7 @@ def eval_policy(task_name,
         vlm_intervention_steps = []
         cnt_step = 0 # Step counter for MMD logging (corresponds to chunks)
 
+        ema_action = None
         while TASK_ENV.take_action_cnt < TASK_ENV.step_lim:
             start_while_time = time_lib.time()
             observation = TASK_ENV.get_obs()
@@ -585,7 +603,8 @@ def eval_policy(task_name,
                             save_path=traj_save_path,
                             mmd_mode=True,
                             mmd_score=mmd_scores[-1] if mmd_scores else None,
-                            camera_name="head_camera"
+                            camera_name="head_camera",
+                            save=save_data
                         )
                     except Exception as e:
                         # print(f"Viz failed: {e}") 
@@ -602,7 +621,11 @@ def eval_policy(task_name,
                 actions = actions.cpu().numpy()
 
             for i, action in enumerate(actions[:act_steps]):
-                TASK_ENV.take_action(action)
+                if ema_action is None:
+                    ema_action = action
+                else:
+                    ema_action = ema_alpha * action + (1 - ema_alpha) * ema_action
+                TASK_ENV.take_action(ema_action)
 
                 # We need to update observation window for every step in the chunk
                 # (except the very last one where we loop back to top)

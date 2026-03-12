@@ -17,17 +17,17 @@ policy_path="/nethome/gpatlin3/flash/huggingface/hub/models--rhodes-team-teleai-
 task_config=demo_clean
 seed=1
 task_name=adjust_bottle
-tag="debug/determinism"
+tag="debug/primitive"
 
 # Steering Parameters:
 compute_mmd=True
 num_mmd_samples=20
 mmd_gamma="median"
-mmd_threshold=1.05
+mmd_threshold=0.0
 use_pivot_steering=False
-use_primitive_steering=False
-guidance_scale=2.5
-ensemble_weights="[0.9,0.1]" # [pivot_weight, primitive_weight]
+use_primitive_steering=True
+guidance_scale=40.0
+ensemble_weights="[0.5,0.5]" # [pivot_weight, primitive_weight]
 vlm_server_url="http://shakey:43859"
 vlm_model_name="Qwen/Qwen2.5-VL-72B-Instruct"
 pivot_prompt_path="/nethome/gpatlin3/flash/TACO/third_party/Robotwin/steering/prompts/pivot_template.txt"

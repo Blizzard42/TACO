@@ -48,10 +48,12 @@ def process_results(base_dir):
 
     # Prepare data for Excel (TSV format is easiest to paste)
     excel_output = []
+    mean_srs = []
     
     for task, values in task_data.items():
         n = len(values)
         mean_sr = statistics.mean(values)
+        mean_srs.append(mean_sr)
         
         # SEM is standard deviation / sqrt(n)
         if n > 1:
@@ -62,11 +64,14 @@ def process_results(base_dir):
             
         print(f"{task:<25} | {mean_sr:<10.4f} | {sem:<10.4f} (n={n})")
         excel_output.append(f"{task}\t{mean_sr}\t{sem}")
+    
+    print("Overall Mean SR across all tasks: {:.4f}".format(statistics.mean(mean_srs) if mean_srs else 0.0))
 
-    print("\n--- Copy/Paste below into Excel ---")
-    print("Task Name\tMean SR\tSEM")
-    for row in excel_output:
-        print(row)
+
+    # print("\n--- Copy/Paste below into Excel ---")
+    # print("Task Name\tMean SR\tSEM")
+    # for row in excel_output:
+    #     print(row)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
