@@ -265,12 +265,16 @@ def main(usr_args):
     torch.backends.cudnn.benchmark = False
     torch.cuda.manual_seed_all(seed + 42)
     torch.use_deterministic_algorithms(True, warn_only=True)  # warn_only avoids crashes on unsupported ops
+    rng_state_cpu = torch.get_rng_state()
+    rng_state_cuda = torch.cuda.get_rng_state(model.policy.config.device)
 
     st_seed, suc_num = eval_policy(task_name,
                                    TASK_ENV,
                                    args,
                                    model,
                                    st_seed,
+                                   rng_state_cpu,
+                                   rng_state_cuda,
                                    test_num=test_num,
                                    video_size=video_size,
                                    instruction_type=instruction_type,
@@ -295,6 +299,8 @@ def eval_policy(task_name,
                 args,
                 model,
                 st_seed,
+                rng_state_cpu,
+                rng_state_cuda,
                 test_num=100,
                 video_size=None,
                 instruction_type=None,
@@ -383,6 +389,16 @@ def eval_policy(task_name,
     all_episode_vlm_interventions = []
 
     while succ_seed < test_num:
+        
+        # Reset global RNGs per episode attempt so steering routines
+        # don't desynchronize the baseline pseudo-random sequences.
+        random.seed(now_seed)
+        np.random.seed(now_seed)
+        torch.manual_seed(now_seed)
+        torch.cuda.manual_seed_all(now_seed)
+        torch.set_rng_state(rng_state_cpu)
+        torch.cuda.set_rng_state(rng_state_cuda, model.policy.config.device)
+
         render_freq = args["render_freq"]
         args["render_freq"] = 0
 
@@ -413,6 +429,7 @@ def eval_policy(task_name,
 
         args["render_freq"] = render_freq
 
+        print(f"Beginning Episode with seed: {now_seed}")
         TASK_ENV.setup_demo(now_ep_num=now_id, seed=now_seed, is_test=True, **args)
         episode_info_list = [episode_info["info"]]
         results = generate_episode_descriptions(args["task_name"], episode_info_list, test_num)

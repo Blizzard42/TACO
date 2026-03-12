@@ -35,7 +35,7 @@ TASKS=(
 )
 
 
-BASE_EXP_NAME="mar/12/steering_determinism_check"
+BASE_EXP_NAME="mar/12/steering_with_episode_reseeding_3"
 
 # Add or remove your VLM servers here
 VLLM_SERVERS=(
@@ -145,7 +145,8 @@ PYTHONUNBUFFERED=1 TORCH_COMPILE_DISABLE=1 python script/eval_lerobot_torch_pi05
     --vlm_model_name ${vlm_model_name} \
     --pivot_prompt_path ${pivot_prompt_path} \
     --primitive_prompt_path ${primitive_prompt_path} \
-    --test_num ${test_num}
+    --test_num ${test_num} \
+    --save_data True
 
 echo "Completed seed: $seed"
 EOT
