@@ -690,7 +690,7 @@ def eval_policy(task_name,
             print("\033[91mFail!\033[0m")
 
         now_id += 1
-        TASK_ENV.close_env(clear_cache=((succ_seed + 1) % clear_cache_freq == 0))
+        TASK_ENV.close_env(clear_cache=True)
 
         if TASK_ENV.render_freq:
             TASK_ENV.viewer.close()

@@ -9,8 +9,8 @@ task_config="demo_clean"
 compute_mmd="True"
 num_mmd_samples=20
 mmd_gamma="median"
-use_pivot_steering="True"
-use_primitive_steering="True"
+use_pivot_steering="False"
+use_primitive_steering="False"
 act_steps=15
 vlm_model_name="Qwen/Qwen2.5-VL-72B-Instruct"
 pivot_prompt_path="/nethome/gpatlin3/flash/TACO/third_party/Robotwin/steering/prompts/pivot_template.txt"
@@ -25,17 +25,65 @@ EMA_ALPHAS=(0.8)
 ENSEMBLE_WEIGHTS=("[0.9,0.1]")
 MMD_THRESHOLDS=(1.05)
 
-SEEDS=(0)
+SEEDS=(0 1 2 3 4 5)
 TASKS=(
-     "adjust_bottle"
-     "beat_block_hammer"  
-     "move_can_pot"
-     "place_container_plate"  
-     "place_object_stand"
+# "adjust_bottle"
+# "beat_block_hammer"
+# "move_can_pot"
+# "place_container_plate"
+# "place_object_stand"
+
+# "place_can_basket"
+# "place_bread_skillet"
+# "shake_bottle"
+# "hanging_mug"
+# "stack_bowls_three"
+# "place_phone_stand"
+# "place_object_scale"
+# "place_object_basket"
+# "move_stapler_pad"
+# "place_burger_fries"
+
+# "click_bell"
+# "stamp_seal"
+# "place_dual_shoes"
+# "place_cans_plasticbox"
+
+#"place_bread_basket"
+
+# "place_mouse_pad"
+#"blocks_ranking_rgb"
+#"pick_diverse_bottles"
+#"stack_bowls_two"
+#"handover_block"
+#"rotate_qrcode"
+#"move_pillbottle_pad"
+#"turn_switch"
+#"dump_bin_bigbin"
+#"place_empty_cup"
+#"place_fan"
+#"open_microwave"
+#"move_playingcard_away"
+#"place_shoe"
+#"stack_blocks_two"
+#"stack_blocks_three"
+#"place_a2b_right"
+#"pick_dual_bottles"
+#"lift_pot"
+#"open_laptop"
+#"place_a2b_left"
+#"grab_roller"
+#"click_alarmclock"
+#"shake_bottle_horizontally"
+#"handover_mic"
+#"press_stapler"
+#"put_bottles_dustbin"
+#"blocks_ranking_size"
+#"put_object_cabinet"
 )
 
 
-BASE_EXP_NAME="mar/12/steering_with_episode_reseeding_3"
+BASE_EXP_NAME="mar/12/final_base_supplemental"
 
 # Add or remove your VLM servers here
 VLLM_SERVERS=(
@@ -54,8 +102,8 @@ NUM_SERVERS=${#VLLM_SERVERS[@]}
 TOTAL_COMBOS=$(( ${#GUIDANCE_SCALES[@]} * ${#EMA_ALPHAS[@]} * ${#ENSEMBLE_WEIGHTS[@]} * ${#MMD_THRESHOLDS[@]} ))
 CURRENT_COMBO=0
 
-# echo "Sleeping for 4 hours to allow previous job to complete"
-# sleep 14400
+# echo "Sleeping for 5 hours and 20 minutes to allow previous job to complete"
+# sleep 19200
 
 echo "Starting Grid Search. Total Hyperparameter Combinations: $TOTAL_COMBOS"
 echo "================================================================================"
@@ -145,19 +193,19 @@ PYTHONUNBUFFERED=1 TORCH_COMPILE_DISABLE=1 python script/eval_lerobot_torch_pi05
     --vlm_model_name ${vlm_model_name} \
     --pivot_prompt_path ${pivot_prompt_path} \
     --primitive_prompt_path ${primitive_prompt_path} \
-    --test_num ${test_num} \
-    --save_data True
+    --test_num ${test_num}
 
 echo "Completed seed: $seed"
 EOT
                     done
+                    # sleep 2400
                 done
                 
                 # 30-minute delay logic
                 if [ "$CURRENT_COMBO" -lt "$TOTAL_COMBOS" ]; then
                     echo "Batch $CURRENT_COMBO submitted successfully."
                     echo "Sleeping for 90 minutes (5400 seconds) to allow VLM server processing..."
-                    sleep 5400
+                    sleep 0
                 else
                     echo "Final batch submitted successfully!"
                 fi

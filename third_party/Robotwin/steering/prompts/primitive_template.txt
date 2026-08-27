@@ -25,7 +25,7 @@ Select the primitive that best corrects this error to allow the robot to resume 
 <OUTPUT_FORMAT>
 You must conclude your response with a single, well-formed JSON object and nothing else. Do not use markdown formatting (like ```json) or add any text before or after the JSON block.
 
-The JSON object must contain two keys: "reasoning" and "chosen_trajectory".
+The JSON object must contain three keys: "reasoning", "chosen_trajectory_left", and "chosen_trajectory_right".
 
     "reasoning": A string containing your detailed analysis of the error state. explicitly mention if the gripper is misaligned (and in which direction) or if it is stuck. Explain why the chosen primitive corrects this specific error.
     "chosen_primitive_left": A string containing the name of the best primitive for the left arm to follow. If no primitive helps, choose "None".
