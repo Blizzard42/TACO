@@ -334,6 +334,13 @@ def eval_policy(task_name,
     act_steps = usr_args.get("act_steps", 15)
     ema_alpha = usr_args.get("ema_alpha", 0.4)
     horizon_steps = 50 # Assuming this aligns with model cfg
+    # Gaussian noise (metres, world-space) added to the EE waypoints the VLM is shown,
+    # to visually separate near-identical candidate trajectories. Affects only the
+    # rendered image; the action_samples used for guidance are untouched. 0.0 = off.
+    traj_std_perturb = float(usr_args.get("traj_std_perturb", 0.0))
+    # cv2 line width for the candidate trajectories drawn for the VLM. Thinner lines
+    # overlap less, so near-identical candidates stay individually visible.
+    pivot_line_thickness = int(usr_args.get("pivot_line_thickness", 2))
 
     vlm_client = None
     if use_pivot_steering or use_primitive_steering:
@@ -346,9 +353,10 @@ def eval_policy(task_name,
             save_dir=os.path.join(log_dir, "vlm_steering"),
             camera_name="head_camera",
             prompt_template_path=pivot_prompt_path,
-            traj_std_perturb=0.0
+            traj_std_perturb=traj_std_perturb,
+            line_thickness=pivot_line_thickness
         )
-        print(f"Initialized PivotSteerer with VLM server: {vlm_server_url}")
+        print(f"Initialized PivotSteerer with VLM server: {vlm_server_url} (traj_std_perturb={traj_std_perturb}, line_thickness={pivot_line_thickness})")
 
     primitive_steerer = None
     if use_primitive_steering:

@@ -29,6 +29,8 @@ class VLMClient:
         self.server_url = server_url
         self.endpoint = f"{server_url}/v1/chat/completions"
         self.model_name = model_name
+        self.sampling_params = self._get_sampling_params(model_name)
+        print('[VLMClient] sampling params for %s: %s' % (model_name, self.sampling_params))
         
         # Store intermediate text responses
         self.last_text_responses = []
@@ -41,6 +43,32 @@ class VLMClient:
             print(f"Successfully connected to VLM server at {server_url}")
         except requests.exceptions.RequestException as e:
             print(f"Warning: Could not connect to VLM server at {health_url}: {e}")
+
+    @staticmethod
+    def _get_sampling_params(model_name: str) -> dict:
+        """Return server-side sampling params tuned per model family.
+
+        Mirrors the recipe in open-pi-zero src/steering/vlm_client.py.
+        """
+        n = model_name.lower()
+        if "qwen3-vl" in n:
+            return {
+                "temperature": 0.7,
+                "top_p": 0.8,
+                "top_k": 20,
+                "repetition_penalty": 1.0,
+            }
+        if any(k in n for k in ("qwen3.6", "qwen3.8", "a3b")):
+            # Thinking models stream chain-of-thought into a separate `reasoning`
+            # field and leave `content` null until it terminates, which breaks
+            # steering. Disabling thinking puts the answer back in `content`.
+            # Rides in the payload as a top-level key, not a sampling parameter.
+            return {
+                "temperature": 0.0,
+                "chat_template_kwargs": {"enable_thinking": False},
+            }
+        # Default: Qwen2.5-VL and others -> deterministic.
+        return {"temperature": 0.0}
 
     def _pil_to_base64(self, image: Image.Image) -> str:
         """Converts a PIL Image to a base64 encoded string."""
@@ -147,7 +175,7 @@ class VLMClient:
                 {"role": "user", "content": user_content}
             ],
             "max_tokens": max_new_tokens,
-            "temperature": 0.0,
+            **self.sampling_params,
         }
 
         try:
@@ -275,7 +303,7 @@ class VLMClient:
                 {"role": "user", "content": user_content}
             ],
             "max_tokens": max_new_tokens,
-            "temperature": 0.0,
+            **self.sampling_params,
         }
 
         try:

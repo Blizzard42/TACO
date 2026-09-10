@@ -4,7 +4,7 @@
 # GLOBAL HARDCODED CONFIGURATIONS
 # ==============================================================================
 policy_name="pi05"
-policy_path="/nethome/gpatlin3/flash/huggingface/hub/models--rhodes-team-teleai--pi05_TACO_robotwin2_finetuned/snapshots/0f000e2748bd1fcb43027d8790f81fcccaa04670/"
+policy_path="/coc/testnvme/gpatlin3/huggingface/hub/models--rhodes-team-teleai--pi05_TACO_robotwin2_finetuned/snapshots/0f000e2748bd1fcb43027d8790f81fcccaa04670/"
 task_config="demo_clean"
 compute_mmd="True"
 num_mmd_samples=20
@@ -13,8 +13,8 @@ use_pivot_steering="False"
 use_primitive_steering="False"
 act_steps=15
 vlm_model_name="Qwen/Qwen2.5-VL-72B-Instruct"
-pivot_prompt_path="/nethome/gpatlin3/flash/TACO/third_party/Robotwin/steering/prompts/pivot_template.txt"
-primitive_prompt_path="/nethome/gpatlin3/flash/TACO/third_party/Robotwin/steering/prompts/primitive_template.txt"
+pivot_prompt_path="/coc/testnvme/gpatlin3/TACO/third_party/Robotwin/steering/prompts/pivot_template.txt"
+primitive_prompt_path="/coc/testnvme/gpatlin3/TACO/third_party/Robotwin/steering/prompts/primitive_template.txt"
 test_num=48
 
 # ==============================================================================
@@ -83,17 +83,12 @@ TASKS=(
 )
 
 
-BASE_EXP_NAME="mar/12/final_base_supplemental"
+BASE_EXP_NAME="sep/8/icra_debug"
 
 # Add or remove your VLM servers here
 VLLM_SERVERS=(
-    "http://optimistprime:38477"
-    "http://clippy:56749"
-    "http://shakey:53727"
-    "http://cheetah:33793"
-    "http://ig-88:56151"
+    http://optimistprime:51995
 )
-
 # ==============================================================================
 # EXECUTION LOOP
 # ==============================================================================
@@ -149,22 +144,20 @@ for mmd in "${MMD_THRESHOLDS[@]}"; do
 #SBATCH --job-name=eval_${task}_${seed}
 #SBATCH --output=${SLURM_LOG_DIR}/run_%j.out
 #SBATCH --error=${SLURM_LOG_DIR}/run_%j.err
-#SBATCH --partition=kira-lab
-#SBATCH --account=kira-lab
+#SBATCH --partition=overcap
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=6
 #SBATCH --gpus-per-node="a40:1"
-#SBATCH --qos="short"
-#SBATCH --mem=64G
-#SBATCH --exclude="droid,flexo,irona,calculon,dendrite,xaea-12,johnny5,synapse,major,qt-1"
+#SBATCH --time=02:00:00
+#SBATCH --mem=32G
 
 nvidia-smi
 export PYTHONIOENCODING=UTF-8
 source ~/.bashrc
 conda deactivate
 conda activate taco
-cd ~/flash/TACO/third_party/Robotwin
+cd /coc/testnvme/yali30/code/symbotic/TACO/third_party/Robotwin
 
 echo "Running evaluation for task: $task with seed: $seed"
 echo "Grid Params: Guidance=$gs, EMA=$ema, Ensemble=$ens"
